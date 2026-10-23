@@ -1,0 +1,104 @@
+/**
+ * ShippingErrorManager - Mobile-First Design System Tokens
+ * Phase: FRONTEND-001 (GITHUB_PAGES_SECURE_FRONTEND_AND_MATERIAL_CODE_SEARCH)
+ *
+ * CORE RULES:
+ * - 48px-class touch targets for field operability with work gloves
+ * - High-contrast readable typography
+ * - Vibrant curated status colors (未確認: Amber, OK: Emerald, NG: Crimson)
+ * - Section 17 Official Palette centrally managed as CSS custom properties
+ */
+
+:root {
+  /* =========================================================================
+   * Section 2: Official Palette Custom Properties (UI-REVIEW-002)
+   * ========================================================================= */
+  --palette-background: #F2F7F5;
+  --palette-headline: #00473E;
+  --palette-paragraph: #475D5B;
+  --palette-primary-button: #FAAE2B;
+  --palette-primary-btn: #FAAE2B;
+  --palette-button-text: #00473E;
+  --palette-btn-text: #00473E;
+  --palette-stroke: #00332C;
+  --palette-dark-stroke: #00332C;
+  --palette-main: #F2F7F5;
+  --palette-highlight: #FAAE2B;
+  --palette-secondary: #FFA8BA;
+  --palette-tertiary: #FA5246;
+
+  /* Aliased Theme Variables */
+  --color-brand-bg: var(--palette-background);
+  --color-brand-headline: var(--palette-headline);
+  --color-brand-paragraph: var(--palette-paragraph);
+  --color-brand-btn-primary: var(--palette-primary-btn);
+  --color-brand-btn-text: var(--palette-btn-text);
+  --color-brand-stroke: var(--palette-dark-stroke);
+  --color-brand-main: var(--palette-main);
+  --color-brand-highlight: var(--palette-highlight);
+  --color-brand-secondary: var(--palette-secondary);
+  --color-brand-tertiary: var(--palette-tertiary);
+
+  /* Touch target dimensions */
+  --touch-target-min: 48px;
+  --touch-target-lg: 56px;
+
+  /* Color Palette - Component Surface & Standard Colors */
+  --color-primary: #00473E;        /* Official Headline */
+  --color-primary-hover: #00332C;
+  --color-primary-light: #F2F7F5;
+
+  --color-surface: #FFFFFF;
+  --color-background: #F2F7F5;    /* Official Background */
+  --color-border: #CBD5E1;        /* Slate-300 */
+  --color-border-focus: #FAAE2B;
+
+  --color-text-main: #00473E;     /* Official Headline */
+  --color-text-muted: #475D5B;    /* Official Paragraph */
+  --color-text-inverse: #FFFFFF;
+
+  /* Review Status Colors */
+  --color-status-pending: #D97706; /* Amber-600 */
+  --color-status-pending-bg: #FEF3C7;
+  --color-status-ok: #059669;      /* Emerald-600 */
+  --color-status-ok-bg: #D1FAE5;
+  --color-status-ng: #DC2626;      /* Red-600 */
+  --color-status-ng-bg: #FEE2E2;
+
+  /* Category accent colors */
+  --color-cat-size: #2563EB;
+  --color-cat-qty: #7C3AED;
+  --color-cat-material: #D97706;
+  --color-cat-omission: #EA580C;
+  --color-cat-quality: #DC2626;
+
+  /* Spacing */
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* Typography (Section 3: Meiryo Japanese font stack) */
+  --font-family: "Meiryo", "Yu Gothic UI", "Yu Gothic", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
+  --font-size-sm: 14px;
+  --font-size-base: 16px;        /* Default 16px prevents iOS Safari auto-zoom */
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* Radii & Shadows */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  /* Layout */
+  --max-content-width: 960px;
+  --header-height: 56px;
+}

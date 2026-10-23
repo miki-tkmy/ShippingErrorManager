@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self';">
+  <meta name="referrer" content="no-referrer">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>出荷チェック・積み間違い管理 | ShippingErrorManager</title>
+  <link rel="stylesheet" href="assets/css/tokens.css?v=20261020b">
+  <link rel="stylesheet" href="assets/css/components.css?v=20261020b">
+</head>
+<body>
+  <!-- Top Indeterminate Progress Bar (FRONTEND-001) -->
+  <div id="globalProgressBar" class="progress-bar-indeterminate" style="display: none;"></div>
+  <header class="app-header">
+    <div class="header-main-row">
+      <div class="header-title-container">
+        <h1 class="app-title">出荷積み間違い管理</h1>
+      </div>
+      <div id="authUserInfo" class="header-user-info">
+        <span id="headerAuthBadge" class="badge" style="display: none;" hidden>未認証</span>
+        <span id="headerUserName" class="header-user-name"></span>
+        <button type="button" id="btnHeaderLogout" class="btn btn-secondary btn-header-logout" style="display: none;" aria-label="ログアウト">ログアウト</button>
+      </div>
+    </div>
+    <div class="app-nav-wrapper">
+      <nav class="app-nav" aria-label="画面切替" id="appNav">
+        <button type="button" class="btn-nav is-active" id="btnNavRecord">新規登録</button>
+        <button type="button" class="btn-nav" id="btnNavList">実績一覧</button>
+        <button type="button" class="btn-nav" id="btnNavReview" style="display: none;" hidden>レビュー管理</button>
+        <button type="button" class="btn-nav" id="btnNavAnalytics">全国集計分析</button>
+      </nav>
+      <div class="nav-scroll-hint" id="navScrollHint" aria-hidden="true"></div>
+    </div>
+  </header>
+
+  <main class="app-container" id="mainContent">
+    <!-- Master Error Notification Banner -->
+    <div class="error-banner" id="masterErrorBanner" role="alert">
+      <span class="error-banner-text" id="masterErrorMessage">マスタ接続エラーが発生しました</span>
+      <button type="button" class="btn btn-secondary" id="btnRetryMaster" style="min-height: 48px; min-width: 48px; padding: 8px 16px; font-size: 0.95rem; font-weight: 600;">再試行</button>
+    </div>
+
+    <!-- View Section: 新規登録 (Record View) -->
+    <div id="viewRecordSection" class="view-section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
+        <h2 style="font-size: 1.25rem; font-weight: bold; margin: 0;">出荷チェック新規登録</h2>
+      </div>
+      <!-- Form Container -->
+      <form id="shipmentCheckForm" onsubmit="return false;" novalidate>
+      
+      <!-- Hidden technical metadata -->
+      <input type="hidden" id="txtInputStartedAt">
+
+      <!-- Section 1: 基本情報 -->
+      <div class="card">
+        <div class="card-title">
+          <span>基本情報</span>
+        </div>
+
+        <!-- 積込日 (最上部配置) -->
+        <div class="form-group">
+          <label class="form-label" for="txtLoadingDate">
+            <span>積込日 <span class="required-asterisk">*</span></span>
+          </label>
+          <input type="date" id="txtLoadingDate" class="form-control" required aria-required="true" style="min-height: 48px; font-size: 1rem;">
+          <div class="form-hint">※出荷チェック対象の積込日を指定してください。</div>
+        </div>
+
+        <!-- 担当者（Base社員）表示 / 使用者変更 -->
+        <div class="form-group">
+          <div class="form-label">
+            <span>担当者（Base社員） <span class="required-asterisk">*</span></span>
+          </div>
+          
+          <div class="employee-display" id="employeeCard">
+            <div class="employee-info-main">
+              <span class="employee-name" id="employeeNameDisplay">未選択</span>
+              <span class="employee-sub">所属: <span id="employeeAreaDisplay">---</span> / <span id="employeeBaseDisplay">---</span></span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-change-user" id="btnChangeUser" aria-label="担当者を変更">
+              変更
+            </button>
+          </div>
+          <div class="form-hint">※前回選択された社員が初期表示されます。別の担当者が操作する場合は「使用者変更」を押してください。</div>
+        </div>
+
+        <!-- 所属 Base -->
+        <div class="form-group">
+          <label class="form-label">
+            <span>所属 Base</span>
+          </label>
+          <div class="info-display-box">
+            <span id="txtBaseArea" style="font-weight: bold; color: var(--color-primary);">---</span>
+          </div>
+        </div>
+      </div>
+
+            <!-- Section 2: リフト作業者情報 -->
+      <div class="card">
+        <div class="card-title">
+          <span>リフト作業者情報</span>
+          <span class="card-section-label">積載担当リフトマン</span>
+        </div>
+
+        <!-- 全国検索切替チェックボックス (chkShowAllDrivers) -->
+        <div class="form-group" style="margin-bottom: var(--space-md);">
+          <div class="checkbox-control">
+            <input type="checkbox" id="chkShowAllDrivers" class="checkbox-input">
+            <label for="chkShowAllDrivers" class="checkbox-label">
+              <span>全国から検索 / 他Baseを含める</span>
+            </label>
+          </div>
+          <div class="form-hint" id="driverScopeHint">※初期状態では所属Baseのリフトマンのみ優先表示されます。</div>
+        </div>
+
+        <!-- Base所属0人の場合のフォーム内非ブロッキング案内 (UI-REVIEW-003-R1) -->
+        <div id="baseDriverEmptyNotice" class="alert-notice alert-warning" style="display: none; padding: 12px 16px; background-color: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; border-radius: var(--radius-md); font-size: 0.9rem; margin-bottom: var(--space-md); line-height: 1.5;" role="status">
+          このBaseに登録されたリフトマンはいません。「全国から検索」をONにすると他Baseのリフトマンも検索できます。
+        </div>
+
+        <!-- リフトマン選択コントロール (selForkliftDriver) -->
+        <div class="form-group">
+          <div class="form-label">
+            <span>リフトマン <span class="required-asterisk">*</span></span>
+          </div>
+
+          <div class="operator-display-box" id="operatorCard">
+            <div class="operator-info-main">
+              <span class="operator-name" id="operatorNameDisplay">未選択</span>
+              <span class="operator-sub" id="operatorSubDisplay">「リフトマンを選択」を押してください</span>
+            </div>
+            <button type="button" class="btn btn-secondary" id="btnSelectDriver" aria-label="リフトマンを選択" style="min-height: 48px; min-width: 48px; padding: 10px 16px; font-size: 0.95rem; font-weight: 600;">
+              選択
+            </button>
+          </div>
+          <div class="form-error" id="driverError">リフトマンを選択してください。</div>
+        </div>
+
+        <!-- 協力会社自動表示 (txtPartnerCompany) -->
+        <div class="form-group">
+          <label class="form-label">
+            <span>協力会社（自動表示）</span>
+          </label>
+          <div class="info-display-box">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span id="txtPartnerCompany" style="font-weight: bold; color: var(--color-primary);">---</span>
+              <span class="badge" id="partnerStatusBadge" style="display: none;">未設定</span>
+            </div>
+          </div>
+          <div class="form-hint">※選択されたリフトマンに紐づく協力会社名が自動表示されます。</div>
+        </div>
+      </div>
+
+      <!-- Section 2: 積載概要 -->
+      <div class="card">
+        <div class="card-title">
+          <span>積載概要</span>
+          <span class="card-section-label">トラック出荷情報</span>
+        </div>
+
+        <!-- 機材種総数 -->
+        <div class="form-group">
+          <label class="form-label" for="numEquipmentTypeCount">
+            <span>機材種総数 <span class="required-asterisk">*</span></span>
+          </label>
+          <div class="stepper-control">
+            <button type="button" class="stepper-btn" id="btnDecrementCount" aria-label="機材種総数を減らす">−</button>
+            <input type="number" id="numEquipmentTypeCount" class="form-control stepper-input" min="1" step="1" value="1" inputmode="numeric">
+            <button type="button" class="stepper-btn" id="btnIncrementCount" aria-label="機材種総数を増やす">＋</button>
+          </div>
+          <div class="form-hint">※積載する機材の「種類数」を入力してください（数量・ピース数ではありません）。</div>
+          <div class="form-error" id="countError"></div>
+        </div>
+
+        <!-- バラ積み有無 -->
+        <div class="form-group">
+          <fieldset style="border: none; padding: 0; margin: 0;">
+            <legend class="form-label" style="width: 100%; margin-bottom: var(--space-xs);">
+              <span>バラ積み有無 <span class="required-asterisk">*</span></span>
+            </legend>
+            <div class="toggle-group">
+              <div class="toggle-item">
+                <input type="radio" id="radLooseYes" name="hasLooseItems" value="true" checked>
+                <label for="radLooseYes" class="toggle-label">はい</label>
+              </div>
+              <div class="toggle-item">
+                <input type="radio" id="radLooseNo" name="hasLooseItems" value="false">
+                <label for="radLooseNo" class="toggle-label">いいえ</label>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+
+        <!-- UI-REVIEW-003: バラ積み作成者・バラ積み状態 (初期表示「はい」時は表示、「いいえ」時は非表示) -->
+        <div id="looseItemFieldsContainer" class="loose-item-fields-group" style="display: block;">
+          <!-- バラ作成担当者 -->
+          <div class="form-group" style="margin-bottom: var(--space-sm);">
+            <label class="form-label" for="txtLooseItemCreator">
+              <span>バラ作成担当者（任意）</span>
+            </label>
+            <input type="text" id="txtLooseItemCreator" class="form-control" placeholder="例: 山田">
+          </div>
+
+          <!-- バラ作成状況 -->
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="txtLooseItemStatus">
+              <span>バラ作成状況（任意）</span>
+            </label>
+            <input type="text" id="txtLooseItemStatus" class="form-control" placeholder="例: 一部作成済み、未着手など">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: 運送・車両情報 (任意) -->
+      <div class="card" style="padding: 0; overflow: hidden;">
+        <div class="accordion" id="optionalAccordion">
+          <button type="button" class="accordion-header" id="accordionHeader" aria-expanded="false">
+            <div>
+              <span>運送・車両情報（任意）</span>
+            </div>
+            <span class="accordion-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+          </button>
+          
+          <div class="accordion-body">
+            <!-- 便種別 -->
+            <div class="form-group">
+              <label class="form-label" for="selTransportCategory">
+                <span>便種別（当社便 / 先方便）（任意）</span>
+              </label>
+              <select id="selTransportCategory" class="form-control">
+                <option value="未指定" selected>未指定</option>
+                <option value="当社便">当社便</option>
+                <option value="先方便">先方便</option>
+              </select>
+            </div>
+
+            <!-- 運送会社名 -->
+            <div class="form-group">
+              <label class="form-label" for="txtCarrierName">
+                <span>運送会社名（任意）</span>
+              </label>
+              <input type="text" id="txtCarrierName" class="form-control" placeholder="例: 大和運輸">
+            </div>
+
+            <!-- 運転手名 -->
+            <div class="form-group">
+              <label class="form-label" for="txtDriverName">
+                <span>運転手名（任意）</span>
+              </label>
+              <input type="text" id="txtDriverName" class="form-control" placeholder="例: 鈴木">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TASK-006: 積み間違い資材部 (1:N) -->
+      <div class="card" id="errorDetailsSection">
+        <div class="card-title">
+          <div class="card-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+          <span class="card-section-label">積み間違い資材 <span class="required-asterisk">*</span></span>
+        </div>
+        <p class="form-hint" style="margin-bottom: var(--space-md);">
+          発見された積み間違いの内容（区分・資材・原因/詳細）を入力してください。複数件ある場合は「＋積み間違いを追加」を押してください。
+        </p>
+        
+        <div id="errorDetailsContainer" class="error-details-container">
+          <!-- Dynamically populated detail cards -->
+        </div>
+
+        <div class="form-error" id="errorDetailsGlobalError" style="margin-bottom: var(--space-md);"></div>
+
+        <button type="button" id="btnAddErrorDetail" class="btn btn-secondary btn-block add-detail-btn">
+          ＋ 積み間違いを追加
+        </button>
+      </div>
+
+      <!-- TASK-007: 証跡添付 (スマホ紙伝票撮影 / 事務所PC既存PDFリンク) -->
+      <div class="card" id="attachmentSection">
+        <div class="card-title">
+          <div class="card-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M6 12v6"/></svg></div>
+          <span class="card-section-label">証跡添付（写真・PDFリンク）</span>
+        </div>
+        <p class="form-hint" style="margin-bottom: var(--space-md);">
+          紙伝票（ピッキングリスト・出荷指示書等）の撮影写真、または事務所PCで共有されている既存PDFリンクを添付できます（複数件登録可能）。
+        </p>
+
+        <!-- Attachment Action Controls -->
+        <div class="attachment-actions" style="display: flex; flex-direction: column; gap: var(--space-sm); margin-bottom: var(--space-md);">
+          <!-- Hidden file input for smartphone photo capture -->
+          <input type="file" id="fileCapturePhoto" accept="image/*" capture="environment" style="display: none;" multiple aria-hidden="true">
+          
+          <!-- Photo Capture Button (48px min touch target) -->
+          <button type="button" id="btnCapturePhoto" class="btn btn-secondary btn-block" style="min-height: 48px; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+            <span>伝票を撮影 / 写真を追加</span>
+          </button>
+
+          <!-- PDF Link Registration Input Group (Office-PC workflow) -->
+          <div class="pdf-link-input-group" style="margin-top: var(--space-xs);">
+            <label class="form-label" for="txtPdfLink" style="margin-bottom: 4px;">
+              <span>事務所PC 既存PDFリンク登録</span>
+              <span class="form-hint" style="display: inline; margin-left: 6px; font-size: 0.8rem;">（共有フォルダパス・社内URL等）</span>
+            </label>
+            <div style="display: flex; gap: var(--space-xs); flex-wrap: wrap;">
+              <input type="text" id="txtPdfLink" class="form-control" placeholder="パスまたはURLを入力" style="flex: 1; min-width: 200px; min-height: 48px;">
+              <button type="button" id="btnAddPdfLink" class="btn btn-secondary" style="min-height: 48px; padding: 0 16px; white-space: nowrap;">
+                ＋ PDFリンク追加
+              </button>
+            </div>
+            <div class="form-error" id="pdfLinkError" style="display: none; margin-top: 4px;"></div>
+          </div>
+        </div>
+
+        <!-- Attachment List Container -->
+        <div id="attachmentList" class="attachment-list" role="list" aria-label="添付証跡一覧">
+          <!-- Dynamically populated attachment cards -->
+        </div>
+        <div id="attachmentEmptyNotice" class="empty-notice" style="padding: var(--space-md); text-align: center; color: var(--color-text-muted); background: var(--color-bg-app); border-radius: var(--radius-sm);">
+          添付された証跡はありません（任意）
+        </div>
+        <div class="form-error" id="attachmentGlobalError" style="display: none; margin-top: var(--space-sm);"></div>
+      </div>
+
+<!-- TASK-008 Submit Action Bar -->
+      <div class="submit-action-bar" style="margin-top: var(--space-xl); margin-bottom: var(--space-xl); padding: 0 var(--space-md);">
+        <button type="button" id="btnSubmitCheck" class="btn btn-primary btn-block" style="min-height: 52px; font-size: 1.1rem; font-weight: bold; background-color: var(--palette-primary-btn, #FAAE2B); color: var(--palette-btn-text, #00473E); border-radius: var(--radius-md, 8px); cursor: pointer; border: none; width: 100%;">
+          出荷チェックを登録する
+        </button>
+        <div id="submitResultBanner" class="alert-banner" style="display: none; margin-top: var(--space-md); padding: var(--space-md); border-radius: var(--radius-md, 8px); font-size: 0.95rem; line-height: 1.5;">
+          <div id="submitResultMessage"></div>
+        </div>
+      </div>
+
+    </form>
+    </div><!-- /#viewRecordSection -->
+
+    <!-- View Section: 実績一覧 (List View) [TASK-009] -->
+    <section id="viewListSection" class="view-section" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
+        <h2 style="font-size: 1.25rem; font-weight: bold; margin: 0;">出荷チェック実績一覧</h2>
+        <button type="button" class="btn btn-secondary" id="btnRefreshList" style="min-height: 40px; padding: 6px 16px; font-size: 0.95rem; cursor: pointer;">
+          更新
+        </button>
+      </div>
+
+      <!-- Monthly Navigation & Date Filter Bar (実績一覧) -->
+      <div class="month-filter-bar" id="monthFilterBarList">
+        <!-- ROW 1: 前月 | YYYY年MM月 | 次月 (Centered Grid) -->
+        <div class="month-nav-controls">
+          <button type="button" class="btn btn-secondary btn-month-nav" id="btnPrevMonthList" aria-label="前月へ移動">〈 前月</button>
+          <div class="month-display-wrapper">
+            <span class="month-display-text" id="txtMonthDisplayList">----年--月</span>
+            <input type="month" id="inputMonthList" class="month-picker-input" aria-label="年月直接指定">
+          </div>
+          <button type="button" class="btn btn-secondary btn-month-nav" id="btnNextMonthList" aria-label="次月へ移動">次月 〉</button>
+        </div>
+        <!-- ROW 2: 期間指定 centered -->
+        <div class="month-range-row">
+          <button type="button" class="btn-toggle-custom-range" id="btnToggleRangeList" aria-expanded="false">
+            期間指定
+          </button>
+        </div>
+        <!-- ROW 3: Screen-specific filters and count -->
+        <div class="month-filters-row">
+          <div class="base-scope-wrapper" id="baseScopeWrapperList" style="display: inline-flex; align-items: center; gap: 6px;">
+            <label for="selListBaseScope" style="font-size: 0.85rem; font-weight: 600; color: var(--color-text-muted);">表示範囲:</label>
+            <select id="selListBaseScope" class="form-control" style="height: 36px; padding: 4px 8px; font-size: 0.85rem; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background-color: #FFFFFF;" aria-label="表示拠点範囲">
+              <option value="BASE" selected>自拠点</option>
+              <option value="ALL">全国</option>
+            </select>
+          </div>
+          <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
+            <span class="list-count-badge" id="lblListFilteredCount">0件</span>
+            <span id="listLoadingIndicator" class="inline-spinner" style="display: none; width: 14px; height: 14px;" role="status" aria-label="更新中"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom Date Range Sub-panel (Collapsible) -->
+      <div class="custom-range-panel" id="customRangePanelList" style="display: none;">
+        <div class="range-inputs-row">
+          <div class="range-input-group">
+            <label for="inputStartDateList">開始日:</label>
+            <input type="date" id="inputStartDateList" class="form-control range-date-input">
+          </div>
+          <span class="range-separator">〜</span>
+          <div class="range-input-group">
+            <label for="inputEndDateList">終了日:</label>
+            <input type="date" id="inputEndDateList" class="form-control range-date-input">
+          </div>
+          <button type="button" class="btn btn-primary btn-apply-range" id="btnApplyRangeList">適用</button>
+          <button type="button" class="btn btn-secondary btn-reset-range" id="btnResetRangeList">月指定に戻す</button>
+        </div>
+        <div class="range-error-msg" id="rangeErrorList" style="display: none;">開始日は終了日以前の日付を指定してください。</div>
+      </div>
+
+      <!-- Loading / Empty / Error State Displays -->
+      <div id="listLoadingState" style="display: none; padding: 32px; text-align: center; color: var(--color-text-muted); font-size: 1rem;">
+        実績データを読み込み中...
+      </div>
+
+      <div id="listEmptyState" style="display: none; padding: 48px 16px; text-align: center; background-color: #F8FAFC; border: 1px dashed var(--color-border); border-radius: var(--radius-md); color: var(--color-text-muted); font-size: 1rem;">
+        登録された実績はまだありません
+      </div>
+
+      <div id="listErrorBanner" class="alert-banner" style="display: none; margin-bottom: var(--space-md); padding: var(--space-md); border-radius: var(--radius-md); background-color: #FEF2F2; color: #991B1B; border: 1px solid #FECACA;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <span id="listErrorMessage"></span>
+          <button type="button" class="btn btn-secondary" id="btnRetryList" style="min-height: 40px; padding: 4px 14px; font-size: 0.9rem; font-weight: 600;">再試行</button>
+        </div>
+      </div>
+
+      <!-- Results Container (Table on Desktop, Cards on Mobile) -->
+      <div id="shipmentCheckListContainer">
+        <div class="table-responsive-desktop" style="overflow-x: auto;">
+          <table class="data-table" id="tblShipmentChecks" style="width: 100%; border-collapse: collapse; display: none;">
+            <thead>
+              <tr style="background-color: #F1F5F9; text-align: left; border-bottom: 2px solid var(--color-border);">
+                <th style="padding: 10px 12px;">積込日</th>
+                <th style="padding: 10px 12px;">拠点名</th>
+                <th style="padding: 10px 12px;">担当社員名</th>
+                <th style="padding: 10px 12px;">協力会社名</th>
+                <th style="padding: 10px 12px;">リフトマン名</th>
+                <th style="padding: 10px 12px; text-align: center;">積み間違い件数</th>
+                <th style="padding: 10px 12px; text-align: center;">確認状況</th>
+              </tr>
+            </thead>
+            <tbody id="tblShipmentChecksBody">
+            </tbody>
+          </table>
+        </div>
+        <div id="cardListContainer" class="card-list-mobile" style="display: flex; flex-direction: column; gap: 12px;">
+        </div>
+      </div>
+
+      <!-- Pagination Navigation -->
+      <div id="paginationContainer" style="display: none; justify-content: space-between; align-items: center; margin-top: var(--space-lg); padding: var(--space-sm) 0;">
+        <button type="button" class="btn btn-secondary" id="btnPrevPage" style="min-height: 48px; min-width: 80px; font-size: 0.95rem;" disabled>
+          前へ
+        </button>
+        <span id="pageIndicator" style="font-size: 0.95rem; font-weight: bold; color: var(--color-text-main);">
+          1 / 1 ページ
+        </span>
+        <button type="button" class="btn btn-secondary" id="btnNextPage" style="min-height: 48px; min-width: 80px; font-size: 0.95rem;" disabled>
+          次へ
+        </button>
+      </div>
+    </section><!-- /#viewListSection -->
+
+  
+    <!-- Review Management View (TASK-010) -->
+    <section id="viewReviewSection" class="view-section" style="display: none;">
+      <div class="content-header">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-sm);">
+          <h2 style="font-size: 1.25rem; font-weight: 700; color: var(--color-text-main);">レビュー管理 (エリアマネージャー)</h2>
+          <button type="button" class="btn btn-secondary" id="btnRefreshReviewList" style="min-height: 48px; min-width: 48px; padding: 8px 16px; font-size: 0.95rem; font-weight: 600;">
+            更新
+          </button>
+        </div>
+
+        <!-- Monthly Navigation & Date Filter Bar for Review -->
+        <div class="month-filter-bar" id="monthFilterBarReview">
+          <!-- ROW 1: 前月 | YYYY年MM月 | 次月 (Centered Grid) -->
+          <div class="month-nav-controls">
+            <button type="button" class="btn btn-secondary btn-month-nav" id="btnPrevMonthReview" aria-label="前月へ移動">〈 前月</button>
+            <div class="month-display-wrapper">
+              <span class="month-display-text" id="txtMonthDisplayReview">----年--月</span>
+              <input type="month" id="inputMonthReview" class="month-picker-input" aria-label="年月直接指定">
+            </div>
+            <button type="button" class="btn btn-secondary btn-month-nav" id="btnNextMonthReview" aria-label="次月へ移動">次月 〉</button>
+          </div>
+          <!-- ROW 2: 期間指定 centered -->
+          <div class="month-range-row">
+            <button type="button" class="btn-toggle-custom-range" id="btnToggleRangeReview" aria-expanded="false">
+              期間指定
+            </button>
+          </div>
+          <!-- ROW 3: Review Filters: 02_spec.md Section 2.4 -->
+          <div class="month-filters-row review-filter-bar">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 600;">
+              <input type="checkbox" id="chkReviewOnlyUnreviewed" checked style="width: 20px; height: 20px; accent-color: var(--color-primary);" />
+              <span>未確認のみ表示</span>
+            </label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label for="selReviewAreaFilter" style="font-size: 0.9rem; font-weight: 600; color: var(--color-text-muted);">Area絞り込み:</label>
+              <select id="selReviewAreaFilter" class="form-control" style="min-height: 40px; min-width: 150px; font-size: 0.9rem;">
+                <option value="全国">全国 (全エリア)</option>
+              </select>
+            </div>
+            <div style="margin-left: auto; font-size: 0.85rem; color: var(--color-text-muted); display: inline-flex; align-items: center; gap: 6px;">
+              <span>対象件数: <strong id="lblReviewTotalCount" style="color: var(--color-text-main);">0</strong>件</span>
+              <span id="reviewLoadingIndicator" class="inline-spinner" style="display: none; width: 14px; height: 14px;" role="status" aria-label="更新中"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom Date Range Sub-panel for Review (Collapsible) -->
+        <div class="custom-range-panel" id="customRangePanelReview" style="display: none;">
+          <div class="range-inputs-row">
+            <div class="range-input-group">
+              <label for="inputStartDateReview">開始日:</label>
+              <input type="date" id="inputStartDateReview" class="form-control range-date-input">
+            </div>
+            <span class="range-separator">〜</span>
+            <div class="range-input-group">
+              <label for="inputEndDateReview">終了日:</label>
+              <input type="date" id="inputEndDateReview" class="form-control range-date-input">
+            </div>
+            <button type="button" class="btn btn-primary btn-apply-range" id="btnApplyRangeReview">適用</button>
+            <button type="button" class="btn btn-secondary btn-reset-range" id="btnResetRangeReview">月指定に戻す</button>
+          </div>
+          <div class="range-error-msg" id="rangeErrorReview" style="display: none;">開始日は終了日以前の日付を指定してください。</div>
+        </div>
+      </div>
+
+      <div id="reviewListContainer">
+        <!-- Rendered dynamically by review.js -->
+      </div>
+    </section>
+
+  
+    <!-- View Section: 全国多軸集計分析 (Analytics View) [TASK-011] -->
+    <section id="viewAnalyticsSection" class="view-section" style="display: none;">
+      <div class="analytics-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-md); flex-wrap: wrap; gap: var(--space-sm);">
+        <h2 style="margin: 0; font-size: 1.4rem; color: var(--color-primary-dark, #1E40AF);">全国多軸集計分析</h2>
+        <div class="analytics-header-actions">
+          <button type="button" class="btn btn-secondary" id="btnExportCsv" aria-label="CSV出力" style="min-height: 48px; min-width: 48px; display: inline-flex; align-items: center; gap: 8px; font-weight: 600;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>CSV出力</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Top-Level Metric Cards [Prompt Section 35] -->
+      <div class="analytics-metrics-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-md); margin-bottom: var(--space-lg);">
+        <div class="metric-card metric-shipments" id="cardAffectedShipments" style="background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: var(--radius-md, 8px); padding: var(--space-md); box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+          <div class="metric-label" style="font-size: 0.9rem; font-weight: 600; color: #1E40AF; margin-bottom: 4px;">対象出荷チェック件数</div>
+          <div class="metric-value-wrapper" style="display: flex; align-items: baseline; gap: 4px;">
+            <span class="metric-value" id="valAffectedShipments" style="font-size: 2rem; font-weight: 800; color: #1E3A8A;">0</span>
+            <span class="metric-unit" style="font-size: 0.95rem; font-weight: 600; color: #1E40AF;">件</span>
+          </div>
+          <div class="metric-subtext" style="font-size: 0.8rem; color: #3B82F6; margin-top: 4px;">伝票・トラック単位 (親件数)</div>
+        </div>
+
+        <div class="metric-card metric-details" id="cardErrorDetails" style="background: #FEF2F2; border: 1px solid #FECACA; border-radius: var(--radius-md, 8px); padding: var(--space-md); box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+          <div class="metric-label" style="font-size: 0.9rem; font-weight: 600; color: #991B1B; margin-bottom: 4px;">積み間違い明細件数</div>
+          <div class="metric-value-wrapper" style="display: flex; align-items: baseline; gap: 4px;">
+            <span class="metric-value" id="valErrorDetails" style="font-size: 2rem; font-weight: 800; color: #7F1D1D;">0</span>
+            <span class="metric-unit" style="font-size: 0.95rem; font-weight: 600; color: #991B1B;">件</span>
+          </div>
+          <div class="metric-subtext" style="font-size: 0.8rem; color: #EF4444; margin-top: 4px;">個別エラー件数 (明細件数)</div>
+        </div>
+      </div>
+
+      <!-- Analysis Axis Selector [8 Canonical Dimensions] -->
+      <div class="analytics-axis-panel" style="background: var(--color-surface, #FFFFFF); border: 1px solid var(--color-border, #E2E8F0); border-radius: var(--radius-md, 8px); padding: var(--space-md); margin-bottom: var(--space-md);">
+        <div style="font-size: 0.9rem; font-weight: 700; color: var(--color-text-main, #334155); margin-bottom: var(--space-xs);">分析軸を選択:</div>
+        <div class="axis-buttons-group" role="toolbar" aria-label="分析軸選択" style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button type="button" class="btn-axis is-active" id="btnAxisArea" aria-pressed="true" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">エリア別</button>
+          <button type="button" class="btn-axis" id="btnAxisBase" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">拠点別</button>
+          <button type="button" class="btn-axis" id="btnAxisCategory" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">区分別</button>
+          <button type="button" class="btn-axis" id="btnAxisMaterial" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">資材別</button>
+          <button type="button" class="btn-axis" id="btnAxisPartner" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">運送会社別</button>
+          <button type="button" class="btn-axis" id="btnAxisDriver" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">リフトマン別</button>
+          <button type="button" class="btn-axis" id="btnAxisLoose" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">バラ有無別</button>
+          <button type="button" class="btn-axis" id="btnAxisTransport" aria-pressed="false" style="min-height: 48px; min-width: 48px; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">便種別</button>
+        </div>
+      </div>
+
+      <!-- Filter Panel -->
+      <div class="analytics-filter-panel" style="background: var(--color-surface, #FFFFFF); border: 1px solid var(--color-border, #E2E8F0); border-radius: var(--radius-md, 8px); padding: var(--space-md); margin-bottom: var(--space-lg);">
+        <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-text-main, #334155); margin-bottom: var(--space-sm);">絞り込み条件</div>
+        
+        <div class="filter-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-md); margin-bottom: var(--space-md);">
+          <div class="filter-group">
+            <label for="dtAnalyticsStart" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">期間 (開始日)</label>
+            <input type="date" id="dtAnalyticsStart" class="form-control" style="width: 100%; min-height: 48px;">
+          </div>
+          <div class="filter-group">
+            <label for="dtAnalyticsEnd" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">期間 (終了日)</label>
+            <input type="date" id="dtAnalyticsEnd" class="form-control" style="width: 100%; min-height: 48px;">
+          </div>
+          <div class="filter-group">
+            <label for="selAnalyticsArea" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">エリア</label>
+            <select id="selAnalyticsArea" class="form-control" style="width: 100%; min-height: 48px;">
+              <option value="">すべて</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="selAnalyticsBase" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">拠点</label>
+            <select id="selAnalyticsBase" class="form-control" style="width: 100%; min-height: 48px;">
+              <option value="">すべて</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="selAnalyticsCategory" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">区分</label>
+            <select id="selAnalyticsCategory" class="form-control" style="width: 100%; min-height: 48px;">
+              <option value="">すべて</option>
+              <option value="サイズ間違い">サイズ間違い</option>
+              <option value="数量間違い">数量間違い</option>
+              <option value="資材間違い">資材間違い</option>
+              <option value="積み忘れ">積み忘れ</option>
+              <option value="品質">品質</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="txtAnalyticsMaterial" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">資材コード/名</label>
+            <input type="text" id="txtAnalyticsMaterial" class="form-control" placeholder="資材検索" style="width: 100%; min-height: 48px;">
+          </div>
+          <div class="filter-group">
+            <label for="txtAnalyticsPartner" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">運送会社コード/名</label>
+            <input type="text" id="txtAnalyticsPartner" class="form-control" placeholder="運送会社検索" style="width: 100%; min-height: 48px;">
+          </div>
+          <div class="filter-group">
+            <label for="txtAnalyticsDriver" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">リフトマン</label>
+            <input type="text" id="txtAnalyticsDriver" class="form-control" placeholder="社員番号・氏名" style="width: 100%; min-height: 48px;">
+          </div>
+          <div class="filter-group">
+            <label for="selAnalyticsLoose" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">バラ有無</label>
+            <select id="selAnalyticsLoose" class="form-control" style="width: 100%; min-height: 48px;">
+              <option value="">すべて</option>
+              <option value="true">バラあり</option>
+              <option value="false">バラなし</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="selAnalyticsTransport" style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">便種</label>
+            <select id="selAnalyticsTransport" class="form-control" style="width: 100%; min-height: 48px;">
+              <option value="">すべて</option>
+              <option value="当社便">当社便</option>
+              <option value="先方便">先方便</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="filter-actions-bar" style="display: flex; gap: var(--space-sm); align-items: center; flex-wrap: wrap;">
+          <button type="button" class="btn btn-primary" id="btnApplyAnalyticsFilter" aria-label="絞り込み適用" style="min-height: 48px; min-width: 80px; font-weight: 600;">適用</button>
+          <button type="button" class="btn btn-secondary" id="btnResetAnalyticsFilter" aria-label="条件クリア" style="min-height: 48px; min-width: 80px;">クリア</button>
+        </div>
+
+        <div class="active-filter-display" id="analyticsActiveFilters" style="margin-top: var(--space-sm); font-size: 0.85rem; color: var(--color-text-secondary, #64748B);">
+          <span class="filter-none-text">フィルタなし（全件対象）</span>
+        </div>
+      </div>
+
+      <!-- Breakdown Table Container -->
+      <div class="analytics-breakdown-card" style="background: var(--color-surface, #FFFFFF); border: 1px solid var(--color-border, #E2E8F0); border-radius: var(--radius-md, 8px); padding: var(--space-md);">
+        <div class="breakdown-card-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-md); flex-direction: column; gap: 4px;">
+          <h3 id="lblCurrentAxisTitle" style="margin: 0; font-size: 1.15rem; color: var(--color-text-main, #334155);">エリア別</h3>
+          <div style="font-size: 0.8rem; color: var(--color-text-secondary, #64748B);">※ 構成比は、現在の絞り込み条件における積み間違い明細全体に占める割合です。</div>
+        </div>
+
+        <div id="analyticsLoadingState" class="analytics-loading" style="display: none; padding: var(--space-lg); text-align: center; color: var(--color-text-secondary, #64748B);">
+          集計データを読み込み中...
+        </div>
+
+        <div id="analyticsEmptyState" class="analytics-empty" style="display: none; padding: var(--space-lg); text-align: center; color: var(--color-text-secondary, #64748B);">
+          該当する集計データがありません。
+        </div>
+
+        <div class="table-responsive" style="overflow-x: auto;">
+          <table class="analytics-table" id="tblAnalyticsBreakdown" style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid var(--color-border, #E2E8F0); background: #F8FAFC;">
+                <th id="thGroupName" class="col-name" style="padding: 12px 16px; text-align: left; font-size: 0.85rem; font-weight: 700; color: #475569;">区分 / 名称</th>
+                <th id="thGroupCode" class="col-code" style="padding: 12px 16px; text-align: left; font-size: 0.85rem; font-weight: 700; color: #475569;">コード</th>
+                <th id="thAffectedShipments" class="col-shipments" style="padding: 12px 16px; text-align: right; font-size: 0.85rem; font-weight: 700; color: #475569;">対象出荷チェック件数</th>
+                <th id="thErrorDetails" class="col-details" style="padding: 12px 16px; text-align: right; font-size: 0.85rem; font-weight: 700; color: #475569;">積み間違い明細件数</th>
+                <th id="thCompositionRatio" class="col-ratio" style="padding: 12px 16px; text-align: right; font-size: 0.85rem; font-weight: 700; color: #475569;">構成比</th>
+                <th id="thVisualBar" class="col-bar" style="padding: 12px 16px; text-align: left; font-size: 0.85rem; font-weight: 700; color: #475569; width: 20%;">構成比グラフ</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyAnalyticsBreakdown">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Employee Selection Modal -->
+  <div class="modal-overlay" id="employeeModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modalTitle">担当者（Base社員）を選択</h2>
+        <button type="button" class="modal-close-btn" id="btnCloseModal" aria-label="閉じる" style="display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="employee-search-box">
+          <input type="search" id="employeeSearchInput" class="form-control" placeholder="氏名で絞り込み...">
+        </div>
+        <ul class="employee-list" id="employeeList">
+          <!-- Populated by JavaScript -->
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" style="min-height: 48px; width: 100%; font-size: 1rem; font-weight: 600;" onclick="document.getElementById('employeeModal').classList.remove('open');">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+    <!-- ShipmentCheck Detail Modal [TASK-009] -->
+  <div class="modal-overlay" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="detailTitle">出荷チェック詳細</h2>
+        <button type="button" class="modal-close-btn" id="btnCloseDetail" aria-label="閉じる" style="display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="modal-body" id="detailBodyContent">
+        <!-- Reconstructed dynamically by JavaScript -->
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="btnFooterCloseDetail" style="min-height: 48px; width: 100%; font-size: 1rem;">
+          一覧に戻る
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lift Operator Selection Modal [TASK-005] -->
+  <div class="modal-overlay" id="driverModal" role="dialog" aria-modal="true" aria-labelledby="driverModalTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="driverModalTitle">リフトマンを選択</h2>
+        <button type="button" class="modal-close-btn" id="btnCloseDriverModal" aria-label="閉じる" style="display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="employee-search-box">
+          <input type="search" id="driverSearchInput" class="form-control" placeholder="作業者氏名で絞り込み...">
+        </div>
+        <div id="driverEmptyNotice" style="display: none; padding: 16px; background-color: #FEF3C7; color: #92400E; border-radius: var(--radius-md); font-size: 0.9rem; margin-bottom: var(--space-sm);">
+          このBaseに登録されたリフトマンがありません。「全国から検索」をONにしてください。
+        </div>
+        <ul class="employee-list" id="driverList">
+          <!-- Populated by JavaScript -->
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="btnCloseDriverModalBottom" style="min-height: 48px; width: 100%; font-size: 1rem; font-weight: 600;">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Login Modal [BROWSER_INTEGRATION_PHASE_1] -->
+  <div class="modal-overlay" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle" style="display: none;">
+    <div class="modal-content" style="max-width: 420px;">
+      <div class="modal-header">
+        <h2 class="modal-title" id="loginModalTitle">ログイン</h2>
+      </div>
+      <form id="loginForm" onsubmit="return false;" novalidate>
+        <div class="modal-body">
+          <div id="loginMessage" class="alert-notice alert-warning" style="display: none; padding: 10px 14px; margin-bottom: 16px; font-size: 0.875rem; border-radius: 6px;" role="alert"></div>
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label" for="txtLoginEmpNo">
+              <span>社員番号 <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="text" id="txtLoginEmpNo" class="form-control" placeholder="例: EMP99001" required autocomplete="username" style="min-height: 44px; font-size: 1rem;">
+          </div>
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label" for="txtLoginPassword">
+              <span>パスワード <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="password" id="txtLoginPassword" class="form-control" placeholder="パスワードを入力" required autocomplete="current-password" style="min-height: 44px; font-size: 1rem;">
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 12px 16px;">
+          <button type="submit" class="btn btn-primary" id="btnLoginSubmit" style="width: 100%; min-height: 48px; font-size: 1rem; font-weight: 600;">
+            ログイン
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Material Error Notice Container (Legacy test & combobox fallback) -->
+  <div id="materialErrorNotice" style="display: none;" aria-live="assertive">資材マスタの取得に失敗しました。時間をおいて再試行してください。</div>
+
+  <!-- Accessible Modal Container (FRONTEND-001) -->
+  <div id="globalModalContainer" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true"></div>
+
+  <!-- Client Foundation Scripts -->
+  <script src="js/config.js?v=20261009"></script>
+  <script src="js/lucide-icons.js?v=20261007"></script>
+  <script src="js/transport-adapter.js?v=20261007"></script>
+  <script src="js/rpc-client.js?v=20261007"></script>
+  <script src="js/loading-component.js?v=20261007"></script>
+  <script src="js/modal-manager.js?v=20261007"></script>
+  <script src="js/material-combobox.js?v=20261021a"></script>
+  <script src="js/password-kdf.js?v=20261007"></script>
+  <script src="js/session-client.js?v=20261007"></script>
+  <script src="js/auth-client.js?v=20261007"></script>
+  <script src="js/authorization-client.js?v=20261007"></script>
+  <script src="js/master-client.js?v=20261021a"></script>
+  <script src="js/shipment-cache.js?v=20261020b"></script>
+  <script src="js/shipment-client.js?v=20261007"></script>
+  <script src="js/shipment-check-form.js?v=20261020b"></script>
+  <script src="js/review.js?v=20261020b"></script>
+  <script src="js/analytics.js?v=20261020b"></script>
+  <script src="js/app.js?v=20261021a"></script>
+</body>
+</html>
