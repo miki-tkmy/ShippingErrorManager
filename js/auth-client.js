@@ -133,6 +133,39 @@
     }
 
     /**
+     * Executes lightweight employee login with employee code alone (no password).
+     * Issues capped FieldChecker session and stores saved employee code for auto-login.
+     *
+     * @param {string} empNo Employee number
+     * @return {Promise<Object>} { token, context, isSimpleSession }
+     */
+    function simpleLogin(empNo) {
+      if (!empNo || typeof empNo !== 'string') {
+        return Promise.reject(new Error('社員番号を入力してください。'));
+      }
+      var cleanEmpNo = empNo.trim();
+      if (!cleanEmpNo) {
+        return Promise.reject(new Error('社員番号を入力してください。'));
+      }
+
+      return rpcClient.call('auth.simpleLogin', { empNo: cleanEmpNo })
+        .then(function (res) {
+          var data = _unwrapPayload(res);
+          if (data && data.token) {
+            var saved = sess.saveToken(data.token);
+            if (!saved) {
+              rpcClient.call('auth.logout', { sessionToken: data.token }).catch(function () {});
+              throw new Error('セッショントークンの保存に失敗しました。');
+            }
+          }
+          if (typeof sess.saveEmployeeCode === 'function') {
+            sess.saveEmployeeCode(cleanEmpNo);
+          }
+          return data;
+        });
+    }
+
+    /**
      * Retrieves sanitized authorization access context for active session.
      *
      * @param {string} [token] Optional explicit token, defaults to sessionStorage
@@ -225,12 +258,16 @@
     return {
       getKdfParams: getKdfParams,
       login: login,
+      simpleLogin: simpleLogin,
       getAccessContext: getAccessContext,
       validateSession: validateSession,
       changePassword: changePassword,
       logout: logout,
       getToken: sess.getToken,
-      hasToken: sess.hasToken
+      hasToken: sess.hasToken,
+      saveEmployeeCode: sess.saveEmployeeCode,
+      getSavedEmployeeCode: sess.getSavedEmployeeCode,
+      clearSavedEmployeeCode: sess.clearSavedEmployeeCode
     };
   }
 

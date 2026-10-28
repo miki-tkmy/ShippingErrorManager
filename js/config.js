@@ -25,14 +25,14 @@
   var GAS_EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_-]+\/exec(?:\?.*)?$/;
 
   /**
-   * Preproduction Canonical GAS Web App Endpoint (Version 12)
+   * Preproduction Canonical GAS Web App Endpoint (Version 14 - Simple Login)
    * Public Web App endpoint URL. Safe for client-side inclusion.
    */
   var PREPROD_GAS_ENDPOINT = [
     'https://script.google.com/macros/s/',
-    'AKfycby27N7pXF11mQVdTSHD',
-    'pgHdkhALjyYDpq3dXj-kqlT5',
-    'dAwBPt6KdQHcppbwKimf8r8E',
+    'AKfycbz7jerRcD2M4QcSAMck',
+    'PZgIZ0aLTxNrg8U__L1zxjIN',
+    'Le-h0voD4thwXSpRY8JaanAc',
     '/exec'
   ].join('');
 

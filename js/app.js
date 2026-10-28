@@ -63,21 +63,70 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.MasterClient = masterClient;
   const formState = new ShipmentCheckFormState(masterClient);
 
-  // Authentication State & DOM Elements (BROWSER_INTEGRATION_PHASE_1)
+  // Authentication State & DOM Elements (BROWSER_INTEGRATION_PHASE_1 & SIMPLE_EMPLOYEE_LOGIN)
   let currentAccessContext = null;
   const loginModal = document.getElementById('loginModal');
   const loginForm = document.getElementById('loginForm');
   const txtLoginEmpNo = document.getElementById('txtLoginEmpNo');
   const txtLoginPassword = document.getElementById('txtLoginPassword');
+  const divLoginPasswordGroup = document.getElementById('divLoginPasswordGroup');
+  const btnToggleAdminLogin = document.getElementById('btnToggleAdminLogin');
+  const loginPromptText = document.getElementById('loginPromptText');
+  const loginModalTitle = document.getElementById('loginModalTitle');
   const loginMessage = document.getElementById('loginMessage');
   const btnLoginSubmit = document.getElementById('btnLoginSubmit');
   const headerAuthBadge = document.getElementById('headerAuthBadge');
   const headerUserName = document.getElementById('headerUserName');
+  const btnHeaderSwitchUser = document.getElementById('btnHeaderSwitchUser');
   const btnHeaderLogout = document.getElementById('btnHeaderLogout');
   const btnNavReview = document.getElementById('btnNavReview');
+  let isAdminLoginMode = false;
 
-  function showLoginModal(message) {
+  function setLoginMode(isAdmin) {
+    isAdminLoginMode = Boolean(isAdmin);
+    if (divLoginPasswordGroup) {
+      divLoginPasswordGroup.style.display = isAdminLoginMode ? 'block' : 'none';
+      if (txtLoginPassword) {
+        if (isAdminLoginMode) {
+          txtLoginPassword.setAttribute('required', '');
+        } else {
+          txtLoginPassword.removeAttribute('required');
+          txtLoginPassword.value = '';
+        }
+      }
+    }
+    if (loginModalTitle) {
+      loginModalTitle.textContent = isAdminLoginMode ? '管理者・審査者ログイン' : '利用開始';
+    }
+    if (loginPromptText) {
+      loginPromptText.innerHTML = isAdminLoginMode
+        ? '管理者または審査担当者の社員番号とパスワードを入力してください。'
+        : '社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>';
+    }
+    if (btnToggleAdminLogin) {
+      btnToggleAdminLogin.textContent = isAdminLoginMode
+        ? '一般社員の簡易利用はこちら'
+        : '管理者・審査担当者はこちら';
+    }
+    if (btnLoginSubmit) {
+      btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
+    }
+  }
+
+  if (btnToggleAdminLogin) {
+    btnToggleAdminLogin.addEventListener('click', () => {
+      setLoginMode(!isAdminLoginMode);
+      if (isAdminLoginMode && txtLoginPassword) {
+        txtLoginPassword.focus();
+      } else if (txtLoginEmpNo) {
+        txtLoginEmpNo.focus();
+      }
+    });
+  }
+
+  function showLoginModal(message, asAdmin = false) {
     if (!loginModal) return;
+    setLoginMode(asAdmin);
     if (loginMessage) {
       if (message) {
         loginMessage.textContent = message;
@@ -89,12 +138,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (btnLoginSubmit) {
       btnLoginSubmit.disabled = false;
-      btnLoginSubmit.textContent = 'ログイン';
+      btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
     }
     loginModal.classList.add('open');
     loginModal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
     if (txtLoginEmpNo) {
+      const saved = authClient && typeof authClient.getSavedEmployeeCode === 'function'
+        ? authClient.getSavedEmployeeCode()
+        : null;
+      if (saved && !txtLoginEmpNo.value) {
+        txtLoginEmpNo.value = saved;
+      }
       txtLoginEmpNo.focus();
     }
   }
@@ -150,6 +205,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btnHeaderLogout) {
       btnHeaderLogout.style.display = 'inline-flex';
     }
+    if (btnHeaderSwitchUser) {
+      btnHeaderSwitchUser.style.display = 'inline-flex';
+    }
 
     // 2. Enforce Role-based Review UI visibility (K. AUTHORIZATION & Section 10)
     const canReview = (typeof AuthorizationClient !== 'undefined' && typeof AuthorizationClient.canReview === 'function')
@@ -191,7 +249,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 4. Session Validation & Restore
+  // 4. Session Validation & Restore (SIMPLE_EMPLOYEE_LOGIN & Auto-login)
   async function initAuthSession() {
     if (transportError) {
       showMasterError('GAS接続先エンドポイントが設定されていません。config.local.js または __SHIPPING_CONFIG__ を確認してください。');
@@ -202,30 +260,66 @@ document.addEventListener('DOMContentLoaded', async () => {
       return false;
     }
 
-    const hasToken = (typeof authClient.hasToken === 'function') ? authClient.hasToken() : false;
-    if (!hasToken) {
-      showLoginModal();
-      return false;
+    // A. Check for saved Employee Code for automatic lightweight login (Section 2)
+    const savedEmpNo = (typeof authClient.getSavedEmployeeCode === 'function')
+      ? authClient.getSavedEmployeeCode()
+      : null;
+
+    if (savedEmpNo) {
+      try {
+        // Must verify latest employment & availability status against GAS server.
+        // Never treat as successful if GAS connection fails!
+        const res = await authClient.simpleLogin(savedEmpNo);
+        const ctx = (res && res.context) ? res.context : (await authClient.getAccessContext());
+        if (ctx && ctx.empNo) {
+          applyAccessContext(ctx);
+          hideLoginModal();
+          switchView('record');
+          return true;
+        } else {
+          throw new Error('Access context missing empNo');
+        }
+      } catch (err) {
+        console.warn('Saved employee auto-login failed:', err);
+        // Fail-Closed: If connection failed, do NOT grant login access!
+        const isTransportError = err && (err.name === 'TransportError' || err.code === 'NETWORK_ERROR' || err.code === 'SERVICE_UNAVAILABLE');
+        if (isTransportError) {
+          showLoginModal('サーバーへの接続に失敗しました。ネットワーク接続を確認のうえ、再試行してください。');
+          return false;
+        }
+        // If employee not found or disabled, clear saved code
+        if (typeof authClient.clearSavedEmployeeCode === 'function') {
+          authClient.clearSavedEmployeeCode();
+        }
+        showLoginModal(err.message || '社員アカウントの確認に失敗しました。再度社員番号を入力してください。');
+        return false;
+      }
     }
 
-    try {
-      const ctx = await authClient.getAccessContext();
-      if (ctx && ctx.empNo) {
-        applyAccessContext(ctx);
-        hideLoginModal();
-        switchView('record');
-        return true;
-      } else {
-        throw new Error('Access context missing empNo');
+    // B. Check for existing active session token (sessionStorage)
+    const hasToken = (typeof authClient.hasToken === 'function') ? authClient.hasToken() : false;
+    if (hasToken) {
+      try {
+        const ctx = await authClient.getAccessContext();
+        if (ctx && ctx.empNo) {
+          applyAccessContext(ctx);
+          hideLoginModal();
+          switchView('record');
+          return true;
+        } else {
+          throw new Error('Access context missing empNo');
+        }
+      } catch (err) {
+        console.warn('Session restore failed or expired:', err);
+        if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearToken === 'function') {
+          SessionClient.clearToken();
+        }
       }
-    } catch (err) {
-      console.warn('Session restore failed or expired:', err);
-      if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearToken === 'function') {
-        SessionClient.clearToken();
-      }
-      showLoginModal('セッションの有効期限が切れました。再度ログインしてください。');
-      return false;
     }
+
+    // C. No saved employee and no valid session: show login modal
+    showLoginModal();
+    return false;
   }
 
   // DOM Elements
@@ -1712,12 +1806,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnRefreshList) btnRefreshList.addEventListener('click', () => loadShipmentCheckList(currentListPage, true));
   if (btnRetryList) btnRetryList.addEventListener('click', () => loadShipmentCheckList(currentListPage, true));
 
-  // Login Form Submission (BROWSER_INTEGRATION_PHASE_1)
+  // Login Form Submission (BROWSER_INTEGRATION_PHASE_1 & SIMPLE_EMPLOYEE_LOGIN)
   if (loginForm) {
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!authClient) {
-        showLoginModal('認証クライアントが初期化されていません。');
+        showLoginModal('認証クライアントが初期化されていません。', isAdminLoginMode);
         return;
       }
 
@@ -1725,22 +1819,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       const password = txtLoginPassword ? txtLoginPassword.value : '';
 
       if (!empNo) {
-        showLoginModal('社員番号を入力してください。');
+        showLoginModal('社員番号を入力してください。', isAdminLoginMode);
         return;
       }
-      if (!password) {
-        showLoginModal('パスワードを入力してください。');
+      if (isAdminLoginMode && !password) {
+        showLoginModal('パスワードを入力してください。', true);
         return;
       }
 
       if (btnLoginSubmit) {
         btnLoginSubmit.disabled = true;
-        btnLoginSubmit.textContent = '認証中...';
+        btnLoginSubmit.textContent = isAdminLoginMode ? '認証中...' : '確認中...';
       }
 
       try {
-        await authClient.login(empNo, password);
-        const ctx = await authClient.getAccessContext();
+        let ctx = null;
+        if (isAdminLoginMode) {
+          await authClient.login(empNo, password);
+          ctx = await authClient.getAccessContext();
+        } else {
+          const res = await authClient.simpleLogin(empNo);
+          ctx = (res && res.context) ? res.context : (await authClient.getAccessContext());
+        }
+
         if (ctx && ctx.empNo) {
           hideLoginModal();
           switchView('record');
@@ -1753,20 +1854,90 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } catch (loginErr) {
         console.error('Login failed:', loginErr);
-        let msg = '社員番号またはパスワードが正しくありません。';
+        let msg = (loginErr && loginErr.message) ? loginErr.message : '社員番号が正しくありません。';
         if (loginErr && loginErr.name === 'TransportError') {
           msg = loginErr.message || '通信エラーが発生しました。接続状況を確認の上、再試行してください。';
         } else if (loginErr && loginErr.code === 'INVALID_CREDENTIALS') {
           msg = '社員番号またはパスワードが正しくありません。';
         } else if (loginErr && loginErr.code === 'ACCOUNT_LOCKED') {
           msg = 'アカウントが一時的にロックされています。時間をおいて再試行してください。';
+        } else if (loginErr && loginErr.code === 'EMPLOYEE_NOT_FOUND') {
+          msg = '社員番号が見つかりません。入力内容を確認してください。';
+        } else if (loginErr && loginErr.code === 'EMPLOYEE_DISABLED') {
+          msg = 'この社員アカウントは無効化されています。';
         }
-        showLoginModal(msg);
+        showLoginModal(msg, isAdminLoginMode);
       } finally {
         if (btnLoginSubmit) {
           btnLoginSubmit.disabled = false;
-          btnLoginSubmit.textContent = 'ログイン';
+          btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
         }
+      }
+    });
+  }
+
+  // Switch Employee Handler (Section 2: 社員切替)
+  let isSwitchingUser = false;
+  if (btnHeaderSwitchUser) {
+    btnHeaderSwitchUser.addEventListener('click', async () => {
+      if (isSwitchingUser) return;
+      isSwitchingUser = true;
+
+      btnHeaderSwitchUser.disabled = true;
+      btnHeaderSwitchUser.setAttribute('aria-busy', 'true');
+
+      try {
+        if (authClient && typeof authClient.logout === 'function') {
+          const logoutPromise = authClient.logout();
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('TIMEOUT')), 3000)
+          );
+          await Promise.race([logoutPromise, timeoutPromise]).catch(() => {});
+        }
+      } finally {
+        if (authClient && typeof authClient.clearSavedEmployeeCode === 'function') {
+          authClient.clearSavedEmployeeCode();
+        } else if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearSavedEmployeeCode === 'function') {
+          SessionClient.clearSavedEmployeeCode();
+        }
+        if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearToken === 'function') {
+          SessionClient.clearToken();
+        }
+        if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateAll) {
+          shipmentCache.invalidateAll();
+        }
+        lastRenderedShipments = null;
+        currentAccessContext = null;
+        window.__CURRENT_ACCESS_CONTEXT__ = null;
+        try {
+          if (formState) {
+            if (typeof formState.clearStoredEmployee === 'function') {
+              formState.clearStoredEmployee(typeof localStorage !== 'undefined' ? localStorage : null);
+            } else {
+              formState.currentEmployee = null;
+            }
+            if (typeof updateEmployeeUI === 'function') {
+              updateEmployeeUI();
+            }
+          }
+        } catch (e) {}
+        if (headerUserName) headerUserName.textContent = '';
+        if (btnHeaderLogout) btnHeaderLogout.style.display = 'none';
+        btnHeaderSwitchUser.style.display = 'none';
+        btnHeaderSwitchUser.disabled = false;
+        btnHeaderSwitchUser.removeAttribute('aria-busy');
+        if (btnNavReview) {
+          btnNavReview.style.display = 'none';
+          btnNavReview.setAttribute('hidden', '');
+        }
+        try {
+          resetViewsForLogout();
+        } catch (e) {}
+        isSwitchingUser = false;
+        if (txtLoginEmpNo) {
+          txtLoginEmpNo.value = '';
+        }
+        showLoginModal('社員番号を入力して利用を開始してください。', false);
       }
     });
   }
@@ -1796,6 +1967,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('Server logout error (best-effort):', logoutErr);
         serverRevoked = false;
       } finally {
+        if (authClient && typeof authClient.clearSavedEmployeeCode === 'function') {
+          authClient.clearSavedEmployeeCode();
+        } else if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearSavedEmployeeCode === 'function') {
+          SessionClient.clearSavedEmployeeCode();
+        }
         try {
           if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearToken === 'function') {
             SessionClient.clearToken();
@@ -1839,6 +2015,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             btnHeaderLogout.removeAttribute('aria-busy');
             btnHeaderLogout.textContent = 'ログアウト';
           }
+          if (btnHeaderSwitchUser) {
+            btnHeaderSwitchUser.style.display = 'none';
+            btnHeaderSwitchUser.disabled = false;
+          }
           if (btnNavReview) {
             btnNavReview.style.display = 'none';
             btnNavReview.setAttribute('hidden', '');
@@ -1856,7 +2036,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const noticeMsg = serverRevoked
           ? 'ログアウトしました。再度ログインしてください。'
           : 'ログアウトしました（サーバー通知未達）。再度ログインしてください。';
-        showLoginModal(noticeMsg);
+        showLoginModal(noticeMsg, false);
       }
     });
   }

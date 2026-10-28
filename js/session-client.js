@@ -102,10 +102,78 @@
     return getToken() !== null;
   }
 
+  var SAVED_EMP_KEY = 'shipping_error_manager_saved_employee_code';
+  var memoryLocalStorage_ = {};
+
+  function getLocalStorage_() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage;
+      }
+    } catch (e) {
+      // Storage disabled or blocked in sandbox
+    }
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(memoryLocalStorage_, k) ? memoryLocalStorage_[k] : null; },
+      setItem: function (k, v) { memoryLocalStorage_[k] = String(v); },
+      removeItem: function (k) { delete memoryLocalStorage_[k]; }
+    };
+  }
+
+  /**
+   * Saves employee code to localStorage for convenient auto-login.
+   * Only employee code is stored; secrets/passwords are never saved.
+   *
+   * @param {string} empNo Employee number
+   * @return {boolean} True if saved
+   */
+  function saveEmployeeCode(empNo) {
+    if (!empNo || typeof empNo !== 'string') {
+      return false;
+    }
+    try {
+      getLocalStorage_().setItem(SAVED_EMP_KEY, empNo.trim());
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Retrieves saved employee code from localStorage.
+   *
+   * @return {string|null} Employee code or null if absent
+   */
+  function getSavedEmployeeCode() {
+    try {
+      var v = getLocalStorage_().getItem(SAVED_EMP_KEY);
+      return (v && typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Clears saved employee code from localStorage.
+   *
+   * @return {boolean} True if cleared
+   */
+  function clearSavedEmployeeCode() {
+    try {
+      getLocalStorage_().removeItem(SAVED_EMP_KEY);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   return {
     saveToken: saveToken,
     getToken: getToken,
     clearToken: clearToken,
-    hasToken: hasToken
+    hasToken: hasToken,
+    saveEmployeeCode: saveEmployeeCode,
+    getSavedEmployeeCode: getSavedEmployeeCode,
+    clearSavedEmployeeCode: clearSavedEmployeeCode
   };
 });

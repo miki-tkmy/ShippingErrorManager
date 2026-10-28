@@ -22,6 +22,7 @@
       <div id="authUserInfo" class="header-user-info">
         <span id="headerAuthBadge" class="badge" style="display: none;" hidden>未認証</span>
         <span id="headerUserName" class="header-user-name"></span>
+        <button type="button" id="btnHeaderSwitchUser" class="btn btn-secondary btn-header-logout" style="display: none;" aria-label="社員切替">社員切替</button>
         <button type="button" id="btnHeaderLogout" class="btn btn-secondary btn-header-logout" style="display: none;" aria-label="ログアウト">ログアウト</button>
       </div>
     </div>
@@ -745,31 +746,39 @@
     </div>
   </div>
 
-  <!-- Login Modal [BROWSER_INTEGRATION_PHASE_1] -->
+  <!-- Login Modal [BROWSER_INTEGRATION_PHASE_1 & SIMPLE_EMPLOYEE_LOGIN] -->
   <div class="modal-overlay" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle" style="display: none;">
-    <div class="modal-content" style="max-width: 420px;">
+    <div class="modal-content" style="max-width: 440px;">
       <div class="modal-header">
-        <h2 class="modal-title" id="loginModalTitle">ログイン</h2>
+        <h2 class="modal-title" id="loginModalTitle">利用開始</h2>
       </div>
       <form id="loginForm" onsubmit="return false;" novalidate>
         <div class="modal-body">
           <div id="loginMessage" class="alert-notice alert-warning" style="display: none; padding: 10px 14px; margin-bottom: 16px; font-size: 0.875rem; border-radius: 6px;" role="alert"></div>
+          <p id="loginPromptText" style="margin-top: 0; margin-bottom: 14px; font-size: 0.9rem; color: var(--color-text-muted);">
+            社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>
+          </p>
           <div class="form-group" style="margin-bottom: 16px;">
             <label class="form-label" for="txtLoginEmpNo">
               <span>社員番号 <span class="required-asterisk">*</span></span>
             </label>
-            <input type="text" id="txtLoginEmpNo" class="form-control" placeholder="例: EMP99001" required autocomplete="username" style="min-height: 44px; font-size: 1rem;">
+            <input type="text" id="txtLoginEmpNo" class="form-control" placeholder="例: EMP00123" required autocomplete="username" style="min-height: 48px; font-size: 1rem;">
           </div>
-          <div class="form-group" style="margin-bottom: 16px;">
+          <div id="divLoginPasswordGroup" class="form-group" style="margin-bottom: 16px; display: none;">
             <label class="form-label" for="txtLoginPassword">
               <span>パスワード <span class="required-asterisk">*</span></span>
             </label>
-            <input type="password" id="txtLoginPassword" class="form-control" placeholder="パスワードを入力" required autocomplete="current-password" style="min-height: 44px; font-size: 1rem;">
+            <input type="password" id="txtLoginPassword" class="form-control" placeholder="管理者用パスワードを入力" autocomplete="current-password" style="min-height: 48px; font-size: 1rem;">
+          </div>
+          <div style="text-align: right; margin-top: 4px; margin-bottom: 8px;">
+            <button type="button" id="btnToggleAdminLogin" class="btn-link" style="background: none; border: none; color: var(--color-primary); cursor: pointer; font-size: 0.825rem; text-decoration: underline; padding: 4px 0;">
+              管理者・審査担当者はこちら
+            </button>
           </div>
         </div>
         <div class="modal-footer" style="padding: 12px 16px;">
           <button type="submit" class="btn btn-primary" id="btnLoginSubmit" style="width: 100%; min-height: 48px; font-size: 1rem; font-weight: 600;">
-            ログイン
+            利用開始
           </button>
         </div>
       </form>
