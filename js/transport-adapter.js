@@ -36,7 +36,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var DEFAULT_HARD_TIMEOUT_MS = 15000;
+  var DEFAULT_HARD_TIMEOUT_MS = 30000;
   var PROTOCOL_VERSION = '1.0';
 
   /**
@@ -66,7 +66,10 @@
     if (rawError && typeof rawError === 'object') {
       if (rawError.name === 'AbortError' || rawError.code === 'CLIENT_TIMEOUT') {
         code = 'CLIENT_TIMEOUT';
-        message = '通信がタイムアウトしました (15秒)。時間をおいて再試行してください。';
+        var timeoutSec = typeof rawError.timeoutSec === 'number' && rawError.timeoutSec > 0
+          ? rawError.timeoutSec
+          : Math.round(DEFAULT_HARD_TIMEOUT_MS / 1000);
+        message = '通信がタイムアウトしました (' + timeoutSec + '秒)。時間をおいて再試行してください。';
       } else if (rawError.code) {
         code = String(rawError.code);
         if (rawError.message && rawError.isSafeMessage) {
@@ -84,9 +87,7 @@
     err.name = 'TransportError';
     err.code = code;
     err.requestId = reqId;
-    if (rawError && typeof rawError === 'object' && rawError.isSafeMessage === true) {
-      err.isSafeMessage = true;
-    }
+    err.isSafeMessage = true;
     return err;
   }
 
