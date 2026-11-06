@@ -70,6 +70,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const txtLoginEmpNo = document.getElementById('txtLoginEmpNo');
   const txtLoginPassword = document.getElementById('txtLoginPassword');
   const divLoginPasswordGroup = document.getElementById('divLoginPasswordGroup');
+  const divNewPasswordGroup = document.getElementById('divNewPasswordGroup');
+  const txtLoginNewPassword = document.getElementById('txtLoginNewPassword');
+  const txtLoginNewPasswordConfirm = document.getElementById('txtLoginNewPasswordConfirm');
   const btnToggleAdminLogin = document.getElementById('btnToggleAdminLogin');
   const loginPromptText = document.getElementById('loginPromptText');
   const loginModalTitle = document.getElementById('loginModalTitle');
@@ -81,13 +84,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnHeaderLogout = document.getElementById('btnHeaderLogout');
   const btnNavReview = document.getElementById('btnNavReview');
   let isAdminLoginMode = false;
+  let isPasswordChangeRequiredMode = false;
 
-  function setLoginMode(isAdmin) {
+  function setLoginMode(isAdmin, requirePasswordChange = false) {
     isAdminLoginMode = Boolean(isAdmin);
+    isPasswordChangeRequiredMode = Boolean(requirePasswordChange);
+    if (txtLoginEmpNo) {
+      txtLoginEmpNo.readOnly = isPasswordChangeRequiredMode;
+    }
     if (divLoginPasswordGroup) {
-      divLoginPasswordGroup.style.display = isAdminLoginMode ? 'block' : 'none';
+      divLoginPasswordGroup.style.display = (isAdminLoginMode && !isPasswordChangeRequiredMode) ? 'block' : 'none';
       if (txtLoginPassword) {
-        if (isAdminLoginMode) {
+        if (isAdminLoginMode && !isPasswordChangeRequiredMode) {
           txtLoginPassword.setAttribute('required', '');
         } else {
           txtLoginPassword.removeAttribute('required');
@@ -95,27 +103,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
     }
+    if (divNewPasswordGroup) {
+      divNewPasswordGroup.style.display = isPasswordChangeRequiredMode ? 'block' : 'none';
+      if (txtLoginNewPassword && txtLoginNewPasswordConfirm) {
+        if (isPasswordChangeRequiredMode) {
+          txtLoginNewPassword.setAttribute('required', '');
+          txtLoginNewPasswordConfirm.setAttribute('required', '');
+        } else {
+          txtLoginNewPassword.removeAttribute('required');
+          txtLoginNewPasswordConfirm.removeAttribute('required');
+          txtLoginNewPassword.value = '';
+          txtLoginNewPasswordConfirm.value = '';
+        }
+      }
+    }
     if (loginModalTitle) {
-      loginModalTitle.textContent = isAdminLoginMode ? '管理者・審査者ログイン' : '利用開始';
+      loginModalTitle.textContent = isPasswordChangeRequiredMode
+        ? '初回パスワード変更'
+        : (isAdminLoginMode ? '管理者・審査者ログイン' : '利用開始');
     }
     if (loginPromptText) {
-      loginPromptText.innerHTML = isAdminLoginMode
-        ? '管理者または審査担当者の社員番号とパスワードを入力してください。'
-        : '社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>';
+      loginPromptText.innerHTML = isPasswordChangeRequiredMode
+        ? '初回ログインのため、15文字以上の新しいパスワードを設定してください。'
+        : (isAdminLoginMode
+          ? '管理者または審査担当者の社員番号とパスワードを入力してください。'
+          : '社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>');
     }
     if (btnToggleAdminLogin) {
+      btnToggleAdminLogin.style.display = isPasswordChangeRequiredMode ? 'none' : '';
       btnToggleAdminLogin.textContent = isAdminLoginMode
         ? '一般社員の簡易利用はこちら'
         : '管理者・審査担当者はこちら';
     }
     if (btnLoginSubmit) {
-      btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
+      btnLoginSubmit.textContent = isPasswordChangeRequiredMode
+        ? 'パスワードを変更してログイン'
+        : (isAdminLoginMode ? 'ログイン' : '利用開始');
     }
   }
 
   if (btnToggleAdminLogin) {
     btnToggleAdminLogin.addEventListener('click', () => {
-      setLoginMode(!isAdminLoginMode);
+      setLoginMode(!isAdminLoginMode, false);
       if (isAdminLoginMode && txtLoginPassword) {
         txtLoginPassword.focus();
       } else if (txtLoginEmpNo) {
@@ -124,9 +153,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function showLoginModal(message, asAdmin = false) {
+  function showLoginModal(message, asAdmin = false, requirePasswordChange = false) {
     if (!loginModal) return;
-    setLoginMode(asAdmin);
+    setLoginMode(asAdmin, requirePasswordChange);
     if (loginMessage) {
       if (message) {
         loginMessage.textContent = message;
@@ -138,12 +167,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (btnLoginSubmit) {
       btnLoginSubmit.disabled = false;
-      btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
+      btnLoginSubmit.textContent = isPasswordChangeRequiredMode
+        ? 'パスワードを変更してログイン'
+        : (isAdminLoginMode ? 'ログイン' : '利用開始');
     }
     loginModal.classList.add('open');
     loginModal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
-    if (txtLoginEmpNo) {
+    if (isPasswordChangeRequiredMode && txtLoginNewPassword) {
+      txtLoginNewPassword.focus();
+    } else if (txtLoginEmpNo) {
       const saved = authClient && typeof authClient.getSavedEmployeeCode === 'function'
         ? authClient.getSavedEmployeeCode()
         : null;
@@ -161,6 +194,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.style.overflow = '';
     if (txtLoginPassword) {
       txtLoginPassword.value = '';
+    }
+    if (txtLoginNewPassword) {
+      txtLoginNewPassword.value = '';
+    }
+    if (txtLoginNewPasswordConfirm) {
+      txtLoginNewPasswordConfirm.value = '';
+    }
+    isPasswordChangeRequiredMode = false;
+    if (txtLoginEmpNo) {
+      txtLoginEmpNo.readOnly = false;
     }
   }
 
@@ -1811,31 +1854,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!authClient) {
-        showLoginModal('認証クライアントが初期化されていません。', isAdminLoginMode);
+        showLoginModal('認証クライアントが初期化されていません。', isAdminLoginMode, isPasswordChangeRequiredMode);
         return;
       }
 
       const empNo = txtLoginEmpNo ? txtLoginEmpNo.value.trim() : '';
       const password = txtLoginPassword ? txtLoginPassword.value : '';
+      const newPassword = txtLoginNewPassword ? txtLoginNewPassword.value : '';
+      const newPasswordConfirm = txtLoginNewPasswordConfirm ? txtLoginNewPasswordConfirm.value : '';
 
       if (!empNo) {
-        showLoginModal('社員番号を入力してください。', isAdminLoginMode);
+        showLoginModal('社員番号を入力してください。', isAdminLoginMode, false);
         return;
       }
-      if (isAdminLoginMode && !password) {
-        showLoginModal('パスワードを入力してください。', true);
+      if (isPasswordChangeRequiredMode) {
+        if (!newPassword || Array.from(newPassword.normalize('NFC')).length < 15) {
+          showLoginModal('新しいパスワードは15文字以上で入力してください。', true, true);
+          return;
+        }
+        if (newPassword !== newPasswordConfirm) {
+          showLoginModal('新しいパスワードと確認用パスワードが一致しません。', true, true);
+          return;
+        }
+      } else if (isAdminLoginMode && !password) {
+        showLoginModal('パスワードを入力してください。', true, false);
         return;
       }
 
       if (btnLoginSubmit) {
         btnLoginSubmit.disabled = true;
-        btnLoginSubmit.textContent = isAdminLoginMode ? '認証中...' : '確認中...';
+        btnLoginSubmit.textContent = isPasswordChangeRequiredMode
+          ? 'パスワード変更中...'
+          : (isAdminLoginMode ? '認証中...' : '確認中...');
       }
 
       try {
         let ctx = null;
-        if (isAdminLoginMode) {
-          await authClient.login(empNo, password);
+        if (isPasswordChangeRequiredMode) {
+          await authClient.changePassword(newPassword);
+          await authClient.login(empNo, newPassword);
+          ctx = await authClient.getAccessContext();
+        } else if (isAdminLoginMode) {
+          const loginRes = await authClient.login(empNo, password);
+          if (loginRes && loginRes.mustChangePassword === true) {
+            showLoginModal('初回ログインのため、15文字以上の新しいパスワードを設定してください。', true, true);
+            return;
+          }
           ctx = await authClient.getAccessContext();
         } else {
           const res = await authClient.simpleLogin(empNo);
@@ -1843,17 +1907,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (ctx && ctx.empNo) {
+          applyAccessContext(ctx);
           hideLoginModal();
-          switchView('record');
           if (typeof closeEmployeeModal === 'function') {
             closeEmployeeModal();
           }
-          applyAccessContext(ctx);
+          switchView('record');
         } else {
           throw new Error('Access context resolution failed');
         }
       } catch (loginErr) {
         console.error('Login failed:', loginErr);
+        if (loginErr && (loginErr.code === 'MUST_CHANGE_PASSWORD' || loginErr.code === 'ERR_MUST_CHANGE_PASSWORD')) {
+          showLoginModal('初回ログインのため、15文字以上の新しいパスワードを設定してください。', true, true);
+          return;
+        }
         let msg = (loginErr && loginErr.message) ? loginErr.message : '社員番号が正しくありません。';
         if (loginErr && loginErr.name === 'TransportError') {
           msg = loginErr.message || '通信エラーが発生しました。接続状況を確認の上、再試行してください。';
@@ -1866,11 +1934,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (loginErr && loginErr.code === 'EMPLOYEE_DISABLED') {
           msg = 'この社員アカウントは無効化されています。';
         }
-        showLoginModal(msg, isAdminLoginMode);
+        showLoginModal(msg, isAdminLoginMode, isPasswordChangeRequiredMode);
       } finally {
         if (btnLoginSubmit) {
           btnLoginSubmit.disabled = false;
-          btnLoginSubmit.textContent = isAdminLoginMode ? 'ログイン' : '利用開始';
+          btnLoginSubmit.textContent = isPasswordChangeRequiredMode
+            ? 'パスワードを変更してログイン'
+            : (isAdminLoginMode ? 'ログイン' : '利用開始');
         }
       }
     });

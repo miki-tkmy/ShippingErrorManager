@@ -84,6 +84,9 @@
     err.name = 'TransportError';
     err.code = code;
     err.requestId = reqId;
+    if (rawError && typeof rawError === 'object' && rawError.isSafeMessage === true) {
+      err.isSafeMessage = true;
+    }
     return err;
   }
 

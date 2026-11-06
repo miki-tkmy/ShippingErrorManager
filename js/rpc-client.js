@@ -78,6 +78,9 @@
     if (typeof rawErr === 'object' && rawErr.name === 'RpcClientError') {
       return rawErr;
     }
+    if (typeof rawErr === 'object' && rawErr.name === 'TransportError' && rawErr.isSafeMessage === true && rawErr.code) {
+      return createNormalizedError(rawErr.code, rawErr.message, { raw: rawErr });
+    }
     var msg = (typeof rawErr === 'object' && rawErr.message)
       ? String(rawErr.message)
       : String(rawErr);

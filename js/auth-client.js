@@ -129,6 +129,10 @@
             }
           }
           return data;
+        })
+        .catch(function (err) {
+          _kdfCache.delete(cleanEmpNo);
+          throw err;
         });
     }
 
@@ -162,6 +166,10 @@
             sess.saveEmployeeCode(cleanEmpNo);
           }
           return data;
+        })
+        .catch(function (err) {
+          _kdfCache.delete(cleanEmpNo);
+          throw err;
         });
     }
 
@@ -231,7 +239,8 @@
           });
         })
         .then(function (res) {
-          // Clear local session storage as password change revokes sessions
+          // Clear local session storage and KDF salt cache as password change rotates salt and revokes sessions
+          _kdfCache.clear();
           sess.clearToken();
           return _unwrapPayload(res);
         });

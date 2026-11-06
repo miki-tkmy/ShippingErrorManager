@@ -770,6 +770,16 @@
             </label>
             <input type="password" id="txtLoginPassword" class="form-control" placeholder="管理者用パスワードを入力" autocomplete="current-password" style="min-height: 48px; font-size: 1rem;">
           </div>
+          <div id="divNewPasswordGroup" class="form-group" style="margin-bottom: 16px; display: none;">
+            <label class="form-label" for="txtLoginNewPassword">
+              <span>新しいパスワード（15文字以上） <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="password" id="txtLoginNewPassword" class="form-control" placeholder="15文字以上の新しいパスワード" autocomplete="new-password" style="min-height: 48px; font-size: 1rem; margin-bottom: 12px;">
+            <label class="form-label" for="txtLoginNewPasswordConfirm">
+              <span>新しいパスワード（確認） <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="password" id="txtLoginNewPasswordConfirm" class="form-control" placeholder="もう一度新しいパスワードを入力" autocomplete="new-password" style="min-height: 48px; font-size: 1rem;">
+          </div>
           <div style="text-align: right; margin-top: 4px; margin-bottom: 8px;">
             <button type="button" id="btnToggleAdminLogin" class="btn-link" style="background: none; border: none; color: var(--color-primary); cursor: pointer; font-size: 0.825rem; text-decoration: underline; padding: 4px 0;">
               管理者・審査担当者はこちら
