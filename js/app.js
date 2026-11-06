@@ -284,12 +284,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateEmployeeUI();
     }
 
-    // Prefetch form options in background for instant Lift Operator modal display (CACHE-003)
-    if (masterClient && typeof masterClient.loadFormOptions === 'function') {
-      masterClient.loadFormOptions(false).catch(err => {
-        console.warn('Background master prefetch notice:', err);
-      });
-    }
+    // 4. Populate Base-scoped dropdowns for LiftOperators & LooseItemCreators
+    await populateBaseStaffDropdowns(true);
   }
 
   // 4. Session Validation & Restore (SIMPLE_EMPLOYEE_LOGIN & Auto-login)
@@ -315,7 +311,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const res = await authClient.simpleLogin(savedEmpNo);
         const ctx = (res && res.context) ? res.context : (await authClient.getAccessContext());
         if (ctx && ctx.empNo) {
-          applyAccessContext(ctx);
+          await applyAccessContext(ctx);
           hideLoginModal();
           switchView('record');
           return true;
@@ -345,7 +341,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         const ctx = await authClient.getAccessContext();
         if (ctx && ctx.empNo) {
-          applyAccessContext(ctx);
+          await applyAccessContext(ctx);
           hideLoginModal();
           switchView('record');
           return true;
@@ -366,7 +362,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // DOM Elements
-  // TASK-005 DOM Elements
+  // TASK-005 & Base-Scoped Dropdown DOM Elements
+  const selLiftOperator = document.getElementById('selLiftOperator');
   const chkShowAllDrivers = document.getElementById('chkShowAllDrivers');
   const btnSelectDriver = document.getElementById('btnSelectDriver');
   const operatorCard = document.getElementById('operatorCard');
@@ -406,10 +403,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   const accordionHeader = document.getElementById('accordionHeader');
 
   const txtLooseItemCreator = document.getElementById('txtLooseItemCreator');
+  const looseItemCreatorEmptyNotice = document.getElementById('looseItemCreatorEmptyNotice');
+  const looseItemCreatorError = document.getElementById('looseItemCreatorError');
   const txtLooseItemStatus = document.getElementById('txtLooseItemStatus');
   const selTransportCategory = document.getElementById('selTransportCategory');
   const txtCarrierName = document.getElementById('txtCarrierName');
   const txtDriverName = document.getElementById('txtDriverName');
+
+  // Settings View DOM Elements
+  const lblSettingsCurrentBase = document.getElementById('lblSettingsCurrentBase');
+  const settingsBaseErrorBanner = document.getElementById('settingsBaseErrorBanner');
+  const lblSettingsLiftOperatorCount = document.getElementById('lblSettingsLiftOperatorCount');
+  const txtNewLiftOperatorName = document.getElementById('txtNewLiftOperatorName');
+  const btnAddLiftOperator = document.getElementById('btnAddLiftOperator');
+  const msgSettingsLiftOperator = document.getElementById('msgSettingsLiftOperator');
+  const emptySettingsLiftOperators = document.getElementById('emptySettingsLiftOperators');
+  const listSettingsLiftOperators = document.getElementById('listSettingsLiftOperators');
+  const lblSettingsLooseItemCreatorCount = document.getElementById('lblSettingsLooseItemCreatorCount');
+  const txtNewLooseItemCreatorName = document.getElementById('txtNewLooseItemCreatorName');
+  const btnAddLooseItemCreator = document.getElementById('btnAddLooseItemCreator');
+  const msgSettingsLooseItemCreator = document.getElementById('msgSettingsLooseItemCreator');
+  const emptySettingsLooseItemCreators = document.getElementById('emptySettingsLooseItemCreators');
+  const listSettingsLooseItemCreators = document.getElementById('listSettingsLooseItemCreators');
+
+  let currentBaseLiftOperators = [];
+  let currentBaseLooseItemCreators = [];
 
   const masterErrorBanner = document.getElementById('masterErrorBanner');
   const masterErrorMessage = document.getElementById('masterErrorMessage');
@@ -508,9 +526,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
           <span style="font-size: 0.85rem; color: var(--color-primary);">${escapeHtml(emp.baseName || '')}</span>
         `;
-        const selectAction = () => {
+        const selectAction = async () => {
           formState.setEmployee(emp, true);
           updateEmployeeUI();
+          await populateBaseStaffDropdowns(true);
           closeEmployeeModal();
         };
         li.addEventListener('click', selectAction);
@@ -528,8 +547,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
 
-  // TASK-005 Lift Operator UI Updater
+  // TASK-005 & Base-Scoped Dropdown Lift Operator UI Updater
   function updateLiftOperatorUI() {
+    if (selLiftOperator) {
+      const selectedCode = formState.selectedLiftOperator ? (formState.selectedLiftOperator.liftOperatorCode || '') : '';
+      if (selLiftOperator.value !== selectedCode) {
+        selLiftOperator.value = selectedCode;
+      }
+    }
+    if (txtLooseItemCreator) {
+      const selectedCreatorName = formState.looseItemCreatorName || '';
+      if (txtLooseItemCreator.value !== selectedCreatorName) {
+        txtLooseItemCreator.value = selectedCreatorName;
+      }
+    }
+
     if (formState.selectedLiftOperator) {
       operatorNameDisplay.textContent = formState.selectedLiftOperator.liftOperatorName;
       const crossTag = formState.selectedLiftOperator.isCrossBase ? ' [他Base]' : '';
@@ -563,6 +595,278 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Clear Base-scoped dropdowns and Settings UI on user switch / logout / error
+  function clearBaseStaffDropdownsAndSettingsUI() {
+    currentBaseLiftOperators = [];
+    currentBaseLooseItemCreators = [];
+
+    if (selLiftOperator) {
+      selLiftOperator.innerHTML = '<option value="">-- リフトマンを選択してください --</option>';
+      selLiftOperator.value = '';
+      selLiftOperator.disabled = false;
+    }
+    if (txtLooseItemCreator) {
+      txtLooseItemCreator.innerHTML = '<option value="">-- バラ作成担当者を選択してください --</option>';
+      txtLooseItemCreator.value = '';
+      txtLooseItemCreator.disabled = false;
+    }
+    if (baseDriverEmptyNotice) {
+      baseDriverEmptyNotice.style.display = 'none';
+      baseDriverEmptyNotice.textContent = '設定から担当者を追加してください';
+    }
+    if (looseItemCreatorEmptyNotice) {
+      looseItemCreatorEmptyNotice.style.display = 'none';
+      looseItemCreatorEmptyNotice.textContent = '設定から担当者を追加してください';
+    }
+    if (driverError) {
+      driverError.style.display = 'none';
+      driverError.textContent = '';
+    }
+    if (looseItemCreatorError) {
+      looseItemCreatorError.style.display = 'none';
+      looseItemCreatorError.textContent = '';
+    }
+    if (lblSettingsCurrentBase) {
+      lblSettingsCurrentBase.textContent = '---';
+    }
+    if (settingsBaseErrorBanner) {
+      settingsBaseErrorBanner.style.display = 'none';
+      settingsBaseErrorBanner.textContent = '';
+    }
+    if (lblSettingsLiftOperatorCount) {
+      lblSettingsLiftOperatorCount.textContent = '0名';
+    }
+    if (lblSettingsLooseItemCreatorCount) {
+      lblSettingsLooseItemCreatorCount.textContent = '0名';
+    }
+    if (txtNewLiftOperatorName) {
+      txtNewLiftOperatorName.value = '';
+      txtNewLiftOperatorName.disabled = false;
+    }
+    if (btnAddLiftOperator) {
+      btnAddLiftOperator.disabled = false;
+    }
+    if (msgSettingsLiftOperator) {
+      msgSettingsLiftOperator.style.display = 'none';
+      msgSettingsLiftOperator.textContent = '';
+    }
+    if (listSettingsLiftOperators) {
+      listSettingsLiftOperators.innerHTML = '';
+    }
+    if (emptySettingsLiftOperators) {
+      emptySettingsLiftOperators.style.display = 'block';
+    }
+    if (txtNewLooseItemCreatorName) {
+      txtNewLooseItemCreatorName.value = '';
+      txtNewLooseItemCreatorName.disabled = false;
+    }
+    if (btnAddLooseItemCreator) {
+      btnAddLooseItemCreator.disabled = false;
+    }
+    if (msgSettingsLooseItemCreator) {
+      msgSettingsLooseItemCreator.style.display = 'none';
+      msgSettingsLooseItemCreator.textContent = '';
+    }
+    if (listSettingsLooseItemCreators) {
+      listSettingsLooseItemCreators.innerHTML = '';
+    }
+    if (emptySettingsLooseItemCreators) {
+      emptySettingsLooseItemCreators.style.display = 'block';
+    }
+  }
+
+  function resolveEffectiveBaseCode() {
+    const rawBaseCode = (currentAccessContext && currentAccessContext.baseCode)
+      || (formState && formState.currentEmployee && formState.currentEmployee.baseCode)
+      || '';
+    const trimmed = String(rawBaseCode || '').trim();
+    if (!trimmed || trimmed === '所属未登録' || trimmed === 'Base未登録') {
+      return '';
+    }
+    return trimmed;
+  }
+
+  // Populate LiftOperator & LooseItemCreator dropdowns strictly for caller's Base
+  async function populateBaseStaffDropdowns(forceRefresh = false) {
+    const currentBaseCode = resolveEffectiveBaseCode();
+
+    if (!currentBaseCode) {
+      currentBaseLiftOperators = [];
+      currentBaseLooseItemCreators = [];
+      formState.clearLiftOperator();
+      if (typeof formState.clearLooseItemCreator === 'function') {
+        formState.clearLooseItemCreator();
+      }
+      if (selLiftOperator) {
+        selLiftOperator.innerHTML = '<option value="">所属Baseが未設定のため選択できません</option>';
+        selLiftOperator.value = '';
+        selLiftOperator.disabled = true;
+      }
+      if (txtLooseItemCreator) {
+        txtLooseItemCreator.innerHTML = '<option value="">所属Baseが未設定のため選択できません</option>';
+        txtLooseItemCreator.value = '';
+        txtLooseItemCreator.disabled = true;
+      }
+      if (baseDriverEmptyNotice) {
+        baseDriverEmptyNotice.textContent = '所属Baseが設定されていないため、担当者の追加・選択はできません。';
+        baseDriverEmptyNotice.style.display = 'block';
+      }
+      if (looseItemCreatorEmptyNotice) {
+        looseItemCreatorEmptyNotice.textContent = '所属Baseが設定されていないため、担当者の追加・選択はできません。';
+        looseItemCreatorEmptyNotice.style.display = 'block';
+      }
+      updateLiftOperatorUI();
+      return { baseCode: '', liftOperators: [], looseItemCreators: [], baseUnassigned: true };
+    }
+
+    try {
+      let liftOps = [];
+      let looseCreators = [];
+
+      if (masterClient && typeof masterClient.listBaseStaff === 'function') {
+        const res = await masterClient.listBaseStaff({ forceRefresh: Boolean(forceRefresh) });
+        liftOps = Array.isArray(res && res.liftOperators) ? res.liftOperators : [];
+        looseCreators = Array.isArray(res && res.looseItemCreators) ? res.looseItemCreators : [];
+      } else {
+        liftOps = await masterClient.getLiftOperators({
+          baseCode: currentBaseCode,
+          showAllDrivers: false,
+          forceRefresh: Boolean(forceRefresh)
+        });
+        looseCreators = (typeof masterClient.getLooseItemCreators === 'function')
+          ? await masterClient.getLooseItemCreators({ baseCode: currentBaseCode, forceRefresh: Boolean(forceRefresh) })
+          : [];
+      }
+
+      // Defense-in-depth: strictly filter to caller's BaseCode and active records only
+      currentBaseLiftOperators = (liftOps || []).filter(op =>
+        op && op.isActive !== false && String(op.baseCode || '') === currentBaseCode
+      );
+      currentBaseLooseItemCreators = (looseCreators || []).filter(c =>
+        c && c.isActive !== false && String(c.baseCode || '') === currentBaseCode
+      );
+
+      // Rebuild #selLiftOperator dropdown
+      if (selLiftOperator) {
+        selLiftOperator.disabled = false;
+        selLiftOperator.innerHTML = '';
+        if (currentBaseLiftOperators.length === 0) {
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = '設定から担当者を追加してください';
+          selLiftOperator.appendChild(emptyOpt);
+          if (baseDriverEmptyNotice) {
+            baseDriverEmptyNotice.textContent = '設定から担当者を追加してください';
+            baseDriverEmptyNotice.style.display = 'block';
+          }
+        } else {
+          const placeholderOpt = document.createElement('option');
+          placeholderOpt.value = '';
+          placeholderOpt.textContent = '-- リフトマンを選択してください --';
+          selLiftOperator.appendChild(placeholderOpt);
+          currentBaseLiftOperators.forEach(op => {
+            const opt = document.createElement('option');
+            opt.value = op.liftOperatorCode;
+            opt.textContent = op.liftOperatorName;
+            selLiftOperator.appendChild(opt);
+          });
+          if (baseDriverEmptyNotice) {
+            baseDriverEmptyNotice.style.display = 'none';
+          }
+        }
+
+        // Preserve selection only if it belongs to current Base
+        const selectedCode = formState.selectedLiftOperator ? formState.selectedLiftOperator.liftOperatorCode : '';
+        const stillValidOp = currentBaseLiftOperators.find(op => op.liftOperatorCode === selectedCode);
+        if (stillValidOp) {
+          selLiftOperator.value = stillValidOp.liftOperatorCode;
+        } else {
+          formState.clearLiftOperator();
+          selLiftOperator.value = '';
+        }
+      }
+
+      // Rebuild #txtLooseItemCreator dropdown
+      if (txtLooseItemCreator) {
+        txtLooseItemCreator.disabled = false;
+        txtLooseItemCreator.innerHTML = '';
+        if (currentBaseLooseItemCreators.length === 0) {
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = '設定から担当者を追加してください';
+          txtLooseItemCreator.appendChild(emptyOpt);
+          if (looseItemCreatorEmptyNotice) {
+            looseItemCreatorEmptyNotice.textContent = '設定から担当者を追加してください';
+            looseItemCreatorEmptyNotice.style.display = 'block';
+          }
+        } else {
+          const placeholderOpt = document.createElement('option');
+          placeholderOpt.value = '';
+          placeholderOpt.textContent = '-- バラ作成担当者を選択してください（任意） --';
+          txtLooseItemCreator.appendChild(placeholderOpt);
+          currentBaseLooseItemCreators.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.looseItemCreatorName;
+            opt.setAttribute('data-code', c.looseItemCreatorCode || '');
+            opt.textContent = c.looseItemCreatorName;
+            txtLooseItemCreator.appendChild(opt);
+          });
+          if (looseItemCreatorEmptyNotice) {
+            looseItemCreatorEmptyNotice.style.display = 'none';
+          }
+        }
+
+        // Preserve selection only if it belongs to current Base
+        const selectedCreatorName = formState.looseItemCreatorName || '';
+        const stillValidCreator = currentBaseLooseItemCreators.find(c => c.looseItemCreatorName === selectedCreatorName);
+        if (stillValidCreator) {
+          txtLooseItemCreator.value = stillValidCreator.looseItemCreatorName;
+        } else {
+          if (typeof formState.clearLooseItemCreator === 'function') {
+            formState.clearLooseItemCreator();
+          } else {
+            formState.looseItemCreatorName = '';
+          }
+          txtLooseItemCreator.value = '';
+        }
+      }
+
+      updateLiftOperatorUI();
+      return {
+        baseCode: currentBaseCode,
+        liftOperators: currentBaseLiftOperators,
+        looseItemCreators: currentBaseLooseItemCreators,
+        baseUnassigned: false
+      };
+    } catch (err) {
+      // Fail-Closed: Never display stale cache or another Base's candidates on communication error
+      console.warn('populateBaseStaffDropdowns failed:', err);
+      currentBaseLiftOperators = [];
+      currentBaseLooseItemCreators = [];
+      formState.clearLiftOperator();
+      if (typeof formState.clearLooseItemCreator === 'function') {
+        formState.clearLooseItemCreator();
+      } else {
+        formState.looseItemCreatorName = '';
+      }
+      if (selLiftOperator) {
+        selLiftOperator.innerHTML = '<option value="">担当者一覧の取得に失敗しました</option>';
+        selLiftOperator.value = '';
+      }
+      if (txtLooseItemCreator) {
+        txtLooseItemCreator.innerHTML = '<option value="">担当者一覧の取得に失敗しました</option>';
+        txtLooseItemCreator.value = '';
+      }
+      updateLiftOperatorUI();
+      return {
+        baseCode: currentBaseCode,
+        liftOperators: [],
+        looseItemCreators: [],
+        error: err
+      };
+    }
+  }
+
   // Lift Operator Modal Logic (Fast UX: Cache-First Instant Display)
   async function openDriverModal() {
     lastFocusedElementForDriverModal = document.activeElement;
@@ -587,29 +891,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Non-blocking base operator empty check (UI-REVIEW-003-R1)
   async function checkBaseOperatorsAndNotify() {
-    if (!baseDriverEmptyNotice) return;
-    if (chkShowAllDrivers.checked) {
-      baseDriverEmptyNotice.style.display = 'none';
-      return;
-    }
-    const currentBaseCode = formState.currentEmployee?.baseCode || '';
-    if (!currentBaseCode) {
-      baseDriverEmptyNotice.style.display = 'none';
-      return;
-    }
-    try {
-      const ops = await masterClient.getLiftOperators({
-        baseCode: currentBaseCode,
-        showAllDrivers: false
-      });
-      if (!ops || ops.length === 0) {
-        baseDriverEmptyNotice.style.display = 'block';
-      } else {
-        baseDriverEmptyNotice.style.display = 'none';
-      }
-    } catch (e) {
-      console.warn('Failed to check base lift operators', e);
-    }
+    await populateBaseStaffDropdowns(false);
   }
 
   async function loadDriversToModal(query = '', forceRefresh = false) {
@@ -678,7 +960,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Lift Operator Event Listeners
+  // Lift Operator Event Listeners (Dropdown & Legacy Modal)
+  if (selLiftOperator) {
+    selLiftOperator.addEventListener('change', async (e) => {
+      const code = e.target.value;
+      if (!code) {
+        formState.clearLiftOperator();
+        updateLiftOperatorUI();
+        return;
+      }
+      const op = currentBaseLiftOperators.find(item => item.liftOperatorCode === code);
+      if (op) {
+        await formState.selectLiftOperator(op);
+      } else {
+        formState.clearLiftOperator();
+      }
+      updateLiftOperatorUI();
+    });
+  }
+
   btnSelectDriver.addEventListener('click', openDriverModal);
   btnCloseDriverModal.addEventListener('click', closeDriverModal);
   if (btnCloseDriverModalBottom) {
@@ -769,8 +1069,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     accordionHeader.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   });
 
-  // 7. Optional fields 2-way binding
-  if (txtLooseItemCreator) txtLooseItemCreator.addEventListener('input', (e) => formState.looseItemCreatorName = e.target.value);
+  // 7. Optional fields 2-way binding (LooseItemCreator dropdown + text inputs)
+  if (txtLooseItemCreator) {
+    const onLooseCreatorChange = (e) => {
+      const val = e.target.value || '';
+      if (!val) {
+        if (typeof formState.clearLooseItemCreator === 'function') {
+          formState.clearLooseItemCreator();
+        } else {
+          formState.looseItemCreatorName = '';
+        }
+        return;
+      }
+      const matched = currentBaseLooseItemCreators.find(
+        c => c.looseItemCreatorName === val || c.looseItemCreatorCode === val
+      );
+      if (matched && typeof formState.selectLooseItemCreator === 'function') {
+        formState.selectLooseItemCreator(matched);
+      } else {
+        formState.looseItemCreatorName = val;
+      }
+    };
+    txtLooseItemCreator.addEventListener('change', onLooseCreatorChange);
+    txtLooseItemCreator.addEventListener('input', onLooseCreatorChange);
+  }
   if (txtLooseItemStatus) txtLooseItemStatus.addEventListener('input', (e) => formState.looseItemStatus = e.target.value);
   selTransportCategory.addEventListener('change', (e) => formState.transportCategory = e.target.value);
   txtCarrierName.addEventListener('input', (e) => formState.carrierName = e.target.value);
@@ -1297,6 +1619,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   function renderValidationErrors() {
     if (formState && formState.errors) {
+      if (formState.errors.liftOperator) {
+        if (driverError) {
+          driverError.textContent = formState.errors.liftOperator;
+          driverError.style.display = 'block';
+        }
+      } else {
+        if (driverError) driverError.style.display = 'none';
+      }
       if (formState.errors.totalMaterialTypeCount) {
         if (countError) {
           countError.textContent = formState.errors.totalMaterialTypeCount;
@@ -1445,10 +1775,248 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnNavRecord = document.getElementById('btnNavRecord');
   const btnNavList = document.getElementById('btnNavList');
   const btnNavAnalytics = document.getElementById('btnNavAnalytics');
+  const btnNavSettings = document.getElementById('btnNavSettings');
   const viewReviewSection = document.getElementById('viewReviewSection');
   const viewRecordSection = document.getElementById('viewRecordSection');
   const viewListSection = document.getElementById('viewListSection');
   const viewAnalyticsSection = document.getElementById('viewAnalyticsSection');
+  const viewSettingsSection = document.getElementById('viewSettingsSection');
+
+  // ==========================================================================
+  // STEP 1 & STEP 2: Settings View Controller (Base-Scoped Staff Management)
+  // ==========================================================================
+  function showSettingsFeedback(targetEl, type, message) {
+    if (!targetEl) return;
+    if (!message) {
+      targetEl.style.display = 'none';
+      targetEl.textContent = '';
+      targetEl.className = 'settings-feedback-msg';
+      return;
+    }
+    targetEl.textContent = message;
+    targetEl.className = `settings-feedback-msg is-${type}`;
+    targetEl.style.display = 'block';
+  }
+
+  function renderSettingsStaffLists(liftOps, looseCreators) {
+    const safeLiftOps = Array.isArray(liftOps) ? liftOps : [];
+    const safeLooseCreators = Array.isArray(looseCreators) ? looseCreators : [];
+
+    if (lblSettingsLiftOperatorCount) {
+      lblSettingsLiftOperatorCount.textContent = `${safeLiftOps.length}名`;
+    }
+    if (listSettingsLiftOperators) {
+      listSettingsLiftOperators.innerHTML = '';
+      if (safeLiftOps.length === 0) {
+        if (emptySettingsLiftOperators) emptySettingsLiftOperators.style.display = 'block';
+      } else {
+        if (emptySettingsLiftOperators) emptySettingsLiftOperators.style.display = 'none';
+        safeLiftOps.forEach((op, idx) => {
+          const li = document.createElement('li');
+          li.className = 'settings-staff-item';
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'settings-staff-name';
+          nameSpan.textContent = op.liftOperatorName || '';
+          const metaSpan = document.createElement('span');
+          metaSpan.className = 'settings-staff-meta';
+          metaSpan.textContent = `No.${idx + 1}`;
+          li.appendChild(nameSpan);
+          li.appendChild(metaSpan);
+          listSettingsLiftOperators.appendChild(li);
+        });
+      }
+    }
+
+    if (lblSettingsLooseItemCreatorCount) {
+      lblSettingsLooseItemCreatorCount.textContent = `${safeLooseCreators.length}名`;
+    }
+    if (listSettingsLooseItemCreators) {
+      listSettingsLooseItemCreators.innerHTML = '';
+      if (safeLooseCreators.length === 0) {
+        if (emptySettingsLooseItemCreators) emptySettingsLooseItemCreators.style.display = 'block';
+      } else {
+        if (emptySettingsLooseItemCreators) emptySettingsLooseItemCreators.style.display = 'none';
+        safeLooseCreators.forEach((c, idx) => {
+          const li = document.createElement('li');
+          li.className = 'settings-staff-item';
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'settings-staff-name';
+          nameSpan.textContent = c.looseItemCreatorName || '';
+          const metaSpan = document.createElement('span');
+          metaSpan.className = 'settings-staff-meta';
+          metaSpan.textContent = `No.${idx + 1}`;
+          li.appendChild(nameSpan);
+          li.appendChild(metaSpan);
+          listSettingsLooseItemCreators.appendChild(li);
+        });
+      }
+    }
+  }
+
+  async function loadSettingsView(forceRefresh = false) {
+    const currentBaseCode = resolveEffectiveBaseCode();
+    const currentBaseName = (currentAccessContext && currentAccessContext.baseName)
+      || (formState && formState.currentEmployee && formState.currentEmployee.baseName)
+      || '';
+
+    if (lblSettingsCurrentBase) {
+      if (currentBaseCode) {
+        lblSettingsCurrentBase.textContent = currentBaseName
+          ? `${currentBaseName} (${currentBaseCode})`
+          : currentBaseCode;
+      } else {
+        lblSettingsCurrentBase.textContent = '所属Base未設定';
+      }
+    }
+
+    if (!currentBaseCode) {
+      if (settingsBaseErrorBanner) {
+        settingsBaseErrorBanner.textContent = '所属Baseが設定されていないため、担当者の追加・選択はできません。管理者へ社員マスターの所属Base設定を依頼してください。';
+        settingsBaseErrorBanner.style.display = 'block';
+      }
+      if (txtNewLiftOperatorName) txtNewLiftOperatorName.disabled = true;
+      if (btnAddLiftOperator) btnAddLiftOperator.disabled = true;
+      if (txtNewLooseItemCreatorName) txtNewLooseItemCreatorName.disabled = true;
+      if (btnAddLooseItemCreator) btnAddLooseItemCreator.disabled = true;
+      renderSettingsStaffLists([], []);
+      return;
+    }
+
+    if (settingsBaseErrorBanner) {
+      settingsBaseErrorBanner.style.display = 'none';
+      settingsBaseErrorBanner.textContent = '';
+    }
+    if (txtNewLiftOperatorName) txtNewLiftOperatorName.disabled = false;
+    if (btnAddLiftOperator) btnAddLiftOperator.disabled = false;
+    if (txtNewLooseItemCreatorName) txtNewLooseItemCreatorName.disabled = false;
+    if (btnAddLooseItemCreator) btnAddLooseItemCreator.disabled = false;
+
+    const result = await populateBaseStaffDropdowns(Boolean(forceRefresh));
+    if (result && result.error) {
+      if (settingsBaseErrorBanner) {
+        settingsBaseErrorBanner.textContent = result.error.message || '担当者一覧の取得に失敗しました。';
+        settingsBaseErrorBanner.style.display = 'block';
+      }
+      renderSettingsStaffLists([], []);
+      return;
+    }
+    renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+  }
+
+  async function handleAddLiftOperator() {
+    showSettingsFeedback(msgSettingsLiftOperator, 'info', '');
+    const currentBaseCode = resolveEffectiveBaseCode();
+    if (!currentBaseCode) {
+      showSettingsFeedback(
+        msgSettingsLiftOperator,
+        'error',
+        '所属Baseが設定されていないため、担当者の追加・選択はできません。'
+      );
+      return;
+    }
+
+    const rawName = txtNewLiftOperatorName ? txtNewLiftOperatorName.value : '';
+    const trimmedName = String(rawName || '').normalize('NFC').replace(/[\u3000\s]+/g, ' ').trim();
+    if (!trimmedName) {
+      showSettingsFeedback(msgSettingsLiftOperator, 'error', 'リフトマン氏名を入力してください。');
+      return;
+    }
+
+    if (btnAddLiftOperator) {
+      btnAddLiftOperator.disabled = true;
+      btnAddLiftOperator.textContent = '追加中...';
+    }
+    try {
+      await masterClient.createLiftOperator(trimmedName);
+      if (txtNewLiftOperatorName) {
+        txtNewLiftOperatorName.value = '';
+      }
+      await populateBaseStaffDropdowns(true);
+      renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+      showSettingsFeedback(
+        msgSettingsLiftOperator,
+        'success',
+        `リフトマン「${trimmedName}」を追加しました。`
+      );
+    } catch (err) {
+      const msg = (err && err.message) ? err.message : 'リフトマンの追加に失敗しました。';
+      showSettingsFeedback(msgSettingsLiftOperator, 'error', msg);
+    } finally {
+      if (btnAddLiftOperator) {
+        btnAddLiftOperator.disabled = false;
+        btnAddLiftOperator.textContent = '追加';
+      }
+    }
+  }
+
+  async function handleAddLooseItemCreator() {
+    showSettingsFeedback(msgSettingsLooseItemCreator, 'info', '');
+    const currentBaseCode = resolveEffectiveBaseCode();
+    if (!currentBaseCode) {
+      showSettingsFeedback(
+        msgSettingsLooseItemCreator,
+        'error',
+        '所属Baseが設定されていないため、担当者の追加・選択はできません。'
+      );
+      return;
+    }
+
+    const rawName = txtNewLooseItemCreatorName ? txtNewLooseItemCreatorName.value : '';
+    const trimmedName = String(rawName || '').normalize('NFC').replace(/[\u3000\s]+/g, ' ').trim();
+    if (!trimmedName) {
+      showSettingsFeedback(msgSettingsLooseItemCreator, 'error', 'バラ作成担当者氏名を入力してください。');
+      return;
+    }
+
+    if (btnAddLooseItemCreator) {
+      btnAddLooseItemCreator.disabled = true;
+      btnAddLooseItemCreator.textContent = '追加中...';
+    }
+    try {
+      await masterClient.createLooseItemCreator(trimmedName);
+      if (txtNewLooseItemCreatorName) {
+        txtNewLooseItemCreatorName.value = '';
+      }
+      await populateBaseStaffDropdowns(true);
+      renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+      showSettingsFeedback(
+        msgSettingsLooseItemCreator,
+        'success',
+        `バラ作成担当者「${trimmedName}」を追加しました。`
+      );
+    } catch (err) {
+      const msg = (err && err.message) ? err.message : 'バラ作成担当者の追加に失敗しました。';
+      showSettingsFeedback(msgSettingsLooseItemCreator, 'error', msg);
+    } finally {
+      if (btnAddLooseItemCreator) {
+        btnAddLooseItemCreator.disabled = false;
+        btnAddLooseItemCreator.textContent = '追加';
+      }
+    }
+  }
+
+  if (btnAddLiftOperator) {
+    btnAddLiftOperator.addEventListener('click', handleAddLiftOperator);
+  }
+  if (txtNewLiftOperatorName) {
+    txtNewLiftOperatorName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAddLiftOperator();
+      }
+    });
+  }
+  if (btnAddLooseItemCreator) {
+    btnAddLooseItemCreator.addEventListener('click', handleAddLooseItemCreator);
+  }
+  if (txtNewLooseItemCreatorName) {
+    txtNewLooseItemCreatorName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAddLooseItemCreator();
+      }
+    });
+  }
 
   const btnRefreshList = document.getElementById('btnRefreshList');
   const listLoadingState = document.getElementById('listLoadingState');
@@ -1631,14 +2199,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnNavList?.classList.toggle('is-active', viewName === 'list');
     btnNavReview?.classList.toggle('is-active', viewName === 'review');
     btnNavAnalytics?.classList.toggle('is-active', viewName === 'analytics');
+    btnNavSettings?.classList.toggle('is-active', viewName === 'settings');
 
     btnNavRecord?.setAttribute('aria-current', viewName === 'record' ? 'page' : 'false');
     btnNavList?.setAttribute('aria-current', viewName === 'list' ? 'page' : 'false');
     btnNavReview?.setAttribute('aria-current', viewName === 'review' ? 'page' : 'false');
     btnNavAnalytics?.setAttribute('aria-current', viewName === 'analytics' ? 'page' : 'false');
+    btnNavSettings?.setAttribute('aria-current', viewName === 'settings' ? 'page' : 'false');
 
     // Horizontal scroll active tab into view without page vertical jump (Section 5)
-    const activeBtn = [btnNavRecord, btnNavList, btnNavReview, btnNavAnalytics].find(btn => btn?.classList.contains('is-active'));
+    const activeBtn = [btnNavRecord, btnNavList, btnNavReview, btnNavAnalytics, btnNavSettings].find(btn => btn?.classList.contains('is-active'));
     if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
       try {
         activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
@@ -1652,6 +2222,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (viewListSection) viewListSection.style.display = viewName === 'list' ? 'block' : 'none';
     if (viewReviewSection) viewReviewSection.style.display = viewName === 'review' ? 'block' : 'none';
     if (viewAnalyticsSection) viewAnalyticsSection.style.display = viewName === 'analytics' ? 'block' : 'none';
+    if (viewSettingsSection) viewSettingsSection.style.display = viewName === 'settings' ? 'block' : 'none';
 
     if (bypassAuth) {
       return;
@@ -1681,6 +2252,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           window.AnalyticsView.loadAnalytics();
         }
       }
+    } else if (viewName === 'settings') {
+      loadSettingsView(true);
     }
   }
 
@@ -1713,9 +2286,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         formState.errorDetails = [formState.createEmptyErrorDetail ? formState.createEmptyErrorDetail() : {}];
         formState.currentEmployee = null;
         formState.selectedLiftOperator = null;
+        formState.selectedLooseItemCreator = null;
+        formState.looseItemCreatorName = '';
         formState.errors = {};
       }
     }
+
+    // Clear Base-scoped dropdown candidates & Settings UI
+    clearBaseStaffDropdownsAndSettingsUI();
 
     // 2. Reset DOM form inputs and draft displays
     const shipmentCheckForm = document.getElementById('shipmentCheckForm');
@@ -1846,6 +2424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnNavList) btnNavList.addEventListener('click', () => switchView('list'));
   if (btnNavReview) btnNavReview.addEventListener('click', () => switchView('review'));
   if (btnNavAnalytics) btnNavAnalytics.addEventListener('click', () => switchView('analytics'));
+  if (btnNavSettings) btnNavSettings.addEventListener('click', () => switchView('settings'));
   if (btnRefreshList) btnRefreshList.addEventListener('click', () => loadShipmentCheckList(currentListPage, true));
   if (btnRetryList) btnRetryList.addEventListener('click', () => loadShipmentCheckList(currentListPage, true));
 
@@ -1907,7 +2486,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (ctx && ctx.empNo) {
-          applyAccessContext(ctx);
+          await applyAccessContext(ctx);
           hideLoginModal();
           if (typeof closeEmployeeModal === 'function') {
             closeEmployeeModal();

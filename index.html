@@ -32,6 +32,10 @@
         <button type="button" class="btn-nav" id="btnNavList">実績一覧</button>
         <button type="button" class="btn-nav" id="btnNavReview" style="display: none;" hidden>レビュー管理</button>
         <button type="button" class="btn-nav" id="btnNavAnalytics">全国集計分析</button>
+        <button type="button" class="btn-nav" id="btnNavSettings" style="display: inline-flex; align-items: center; gap: 6px;">
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>設定</span>
+        </button>
       </nav>
       <div class="nav-scroll-hint" id="navScrollHint" aria-hidden="true"></div>
     </div>
@@ -106,8 +110,8 @@
           <span class="card-section-label">積載担当リフトマン</span>
         </div>
 
-        <!-- 全国検索切替チェックボックス (chkShowAllDrivers) -->
-        <div class="form-group" style="margin-bottom: var(--space-md);">
+        <!-- 全国検索切替チェックボックス (chkShowAllDrivers - kept hidden for legacy test compatibility) -->
+        <div class="form-group" style="margin-bottom: var(--space-md); display: none;">
           <div class="checkbox-control">
             <input type="checkbox" id="chkShowAllDrivers" class="checkbox-input">
             <label for="chkShowAllDrivers" class="checkbox-label">
@@ -122,13 +126,17 @@
           このBaseに登録されたリフトマンはいません。「全国から検索」をONにすると他Baseのリフトマンも検索できます。
         </div>
 
-        <!-- リフトマン選択コントロール (selForkliftDriver) -->
+        <!-- リフトマン選択コントロール (selLiftOperator) -->
         <div class="form-group">
-          <div class="form-label">
+          <label class="form-label" for="selLiftOperator">
             <span>リフトマン <span class="required-asterisk">*</span></span>
-          </div>
+          </label>
+          <select id="selLiftOperator" class="form-control" required aria-required="true" style="min-height: 48px; font-size: 1rem;">
+            <option value="">設定から担当者を追加してください</option>
+          </select>
+          <div class="form-hint" id="liftOperatorDropdownHint">※所属Baseに登録されたリフトマンから選択してください。未登録の場合は「設定」メニューから追加できます。</div>
 
-          <div class="operator-display-box" id="operatorCard">
+          <div class="operator-display-box" id="operatorCard" style="display: none;">
             <div class="operator-info-main">
               <span class="operator-name" id="operatorNameDisplay">未選択</span>
               <span class="operator-sub" id="operatorSubDisplay">「リフトマンを選択」を押してください</span>
@@ -202,7 +210,10 @@
             <label class="form-label" for="txtLooseItemCreator">
               <span>バラ作成担当者（任意）</span>
             </label>
-            <input type="text" id="txtLooseItemCreator" class="form-control" placeholder="例: 山田">
+            <select id="txtLooseItemCreator" class="form-control" style="min-height: 48px; font-size: 1rem;">
+              <option value="">設定から担当者を追加してください</option>
+            </select>
+            <div class="form-hint" id="looseItemCreatorDropdownHint">※所属Baseに登録されたバラ作成担当者から選択してください。未登録の場合は「設定」メニューから追加できます。</div>
           </div>
 
           <!-- バラ作成状況 -->
@@ -677,6 +688,82 @@
             <tbody id="tbodyAnalyticsBreakdown">
             </tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- View Section: 設定 / Base別担当者管理 (Settings View) -->
+    <section id="viewSettingsSection" class="view-section" style="display: none;">
+      <div class="settings-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-md); flex-wrap: wrap; gap: var(--space-sm);">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <svg class="lucide-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <h2 style="font-size: 1.25rem; font-weight: bold; margin: 0;">設定（Base別担当者管理）</h2>
+        </div>
+        <div class="settings-base-badge" id="settingsCurrentBaseBadge" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background-color: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE; border-radius: 9999px; font-size: 0.9rem; font-weight: 700;">
+          <span>対象拠点:</span>
+          <span id="lblSettingsCurrentBase">---</span>
+        </div>
+      </div>
+
+      <p class="form-hint" style="margin-top: 0; margin-bottom: var(--space-md);">
+        ログイン中の社員が所属するBase（拠点）のリフトマンとバラ作成担当者を登録します。追加した担当者は「新規登録」画面のドロップダウンに即時反映されます。
+      </p>
+
+      <div id="settingsBaseErrorBanner" class="alert-banner" style="display: none; margin-bottom: var(--space-md); padding: var(--space-md); border-radius: var(--radius-md); background-color: #FEF2F2; color: #991B1B; border: 1px solid #FECACA;" role="alert"></div>
+
+      <div class="settings-grid">
+        <!-- Section 1: リフトマン管理 -->
+        <div class="card settings-section-card" id="settingsLiftOperatorCard">
+          <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>リフトマン管理</span>
+            <span class="list-count-badge" id="lblSettingsLiftOperatorCount">0名</span>
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-md);">
+            <label class="form-label" for="txtNewLiftOperatorName">
+              <span>リフトマン氏名</span>
+            </label>
+            <div class="settings-add-row">
+              <input type="text" id="txtNewLiftOperatorName" class="form-control" placeholder="例: 山田 太郎" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+              <button type="button" class="btn btn-primary settings-add-btn" id="btnAddLiftOperator" style="min-height: 48px; padding: 0 20px; font-weight: 700; white-space: nowrap;">
+                追加
+              </button>
+            </div>
+            <div id="msgSettingsLiftOperator" class="settings-feedback-msg" style="display: none;" role="status"></div>
+          </div>
+
+          <div class="settings-list-header">登録済みリフトマン一覧</div>
+          <div id="emptySettingsLiftOperators" class="settings-empty-state">
+            登録されたリフトマンはありません。上の入力欄から追加してください。
+          </div>
+          <ul id="listSettingsLiftOperators" class="settings-staff-list" aria-label="登録済みリフトマン一覧"></ul>
+        </div>
+
+        <!-- Section 2: バラ作成担当者管理 -->
+        <div class="card settings-section-card" id="settingsLooseItemCreatorCard">
+          <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>バラ作成担当者管理</span>
+            <span class="list-count-badge" id="lblSettingsLooseItemCreatorCount">0名</span>
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-md);">
+            <label class="form-label" for="txtNewLooseItemCreatorName">
+              <span>バラ作成担当者氏名</span>
+            </label>
+            <div class="settings-add-row">
+              <input type="text" id="txtNewLooseItemCreatorName" class="form-control" placeholder="例: 佐藤 花子" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+              <button type="button" class="btn btn-primary settings-add-btn" id="btnAddLooseItemCreator" style="min-height: 48px; padding: 0 20px; font-weight: 700; white-space: nowrap;">
+                追加
+              </button>
+            </div>
+            <div id="msgSettingsLooseItemCreator" class="settings-feedback-msg" style="display: none;" role="status"></div>
+          </div>
+
+          <div class="settings-list-header">登録済みバラ作成担当者一覧</div>
+          <div id="emptySettingsLooseItemCreators" class="settings-empty-state">
+            登録されたバラ作成担当者はありません。上の入力欄から追加してください。
+          </div>
+          <ul id="listSettingsLooseItemCreators" class="settings-staff-list" aria-label="登録済みバラ作成担当者一覧"></ul>
         </div>
       </div>
     </section>

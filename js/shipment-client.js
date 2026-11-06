@@ -233,6 +233,45 @@
     });
   };
 
+  ShipmentClient.prototype.listBaseStaff = function (tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    return this.rpcClient.call('staff.listByBase', {
+      sessionToken: token
+    });
+  };
+
+  ShipmentClient.prototype.createLiftOperator = function (liftOperatorName, tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    return this.rpcClient.call('liftOperator.create', {
+      sessionToken: token,
+      request: {
+        liftOperatorName: liftOperatorName
+      }
+    }, { isMutation: true });
+  };
+
+  ShipmentClient.prototype.createLooseItemCreator = function (looseItemCreatorName, tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    return this.rpcClient.call('looseItemCreator.create', {
+      sessionToken: token,
+      request: {
+        looseItemCreatorName: looseItemCreatorName
+      }
+    }, { isMutation: true });
+  };
+
   return {
     ShipmentClient: ShipmentClient,
     createShipmentClient: function (options) {

@@ -6,7 +6,15 @@
  */
 class MasterApiClient {
   constructor(baseUrl = '/api/master') {
-    this.baseUrl = baseUrl;
+    if (baseUrl && typeof baseUrl === 'object') {
+      this.baseUrl = baseUrl.baseUrl || '/api/master';
+      this.shipmentClient = baseUrl.shipmentClient || null;
+      this.rpcClient = baseUrl.rpcClient || null;
+    } else {
+      this.baseUrl = baseUrl;
+      this.shipmentClient = null;
+      this.rpcClient = null;
+    }
     this.cachedFormOptions = null;
     this.cachedEmployees = null;
     this.cachedPartners = null;
@@ -14,6 +22,7 @@ class MasterApiClient {
     this.cachedAreas = null;
     this.cachedMaterials = null;
     this.cachedLiftOperators = null;
+    this.cachedLooseItemCreators = null;
     this.inFlightFormOptionsPromise = null;
     this.loadSeq = 0;
     this.formOptionsCachedAt = 0;
@@ -29,6 +38,7 @@ class MasterApiClient {
     this.cachedAreas = null;
     this.cachedMaterials = null;
     this.cachedLiftOperators = null;
+    this.cachedLooseItemCreators = null;
     this.inFlightFormOptionsPromise = null;
   }
 
@@ -78,11 +88,21 @@ class MasterApiClient {
       sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
     })) : [];
 
+    const creatorsSource = (typeof window !== 'undefined' && window.__SHIPPING_ERROR_LOOSE_ITEM_CREATORS__) || fixtures?.looseItemCreators;
+    const looseItemCreators = Array.isArray(creatorsSource) ? creatorsSource.map(c => ({
+      looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+      looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+      baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+      isEnabled: c.isEnabled !== false,
+      sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+    })) : [];
+
     return {
       bases,
       materials,
       partners,
       liftOperators: operators,
+      looseItemCreators,
       canonicalCategories: fixtures?.canonicalCategories || []
     };
   }
@@ -122,6 +142,7 @@ class MasterApiClient {
             const hasCollections = candidatePayload && typeof candidatePayload === 'object' && (
               (Array.isArray(candidatePayload.bases) && candidatePayload.bases.length > 0) ||
               (Array.isArray(candidatePayload.liftOperators) && candidatePayload.liftOperators.length > 0) ||
+              (Array.isArray(candidatePayload.looseItemCreators) && candidatePayload.looseItemCreators.length > 0) ||
               (Array.isArray(candidatePayload.partners) && candidatePayload.partners.length > 0)
             );
             if (hasCollections) {
@@ -139,6 +160,10 @@ class MasterApiClient {
             const hasFixtures = typeof window !== 'undefined'
               && (window.__SHIPPING_ERROR_MASTER_FIXTURES__ || window.__SHIPPING_ERROR_LIFT_OPERATORS__);
             if (!hasFixtures && !isDev) {
+              this.cachedLiftOperators = [];
+              this.cachedLooseItemCreators = [];
+              this.cachedFormOptions = null;
+              this.formOptionsCachedAt = 0;
               throw new Error('マスターデータの取得に失敗しました。時間をおいて再試行してください。');
             }
           }
@@ -169,7 +194,8 @@ class MasterApiClient {
               bases: Array.isArray(bases) ? bases : [],
               materials: Array.isArray(materials) ? materials : [],
               partners: Array.isArray(partners) ? partners : [],
-              liftOperators: Array.isArray(liftOps) ? liftOps : []
+              liftOperators: Array.isArray(liftOps) ? liftOps : [],
+              looseItemCreators: []
             };
           } catch (e) {
             // Ignored in dev
@@ -182,6 +208,10 @@ class MasterApiClient {
         }
 
         if (!payload || typeof payload !== 'object') {
+          this.cachedLiftOperators = [];
+          this.cachedLooseItemCreators = [];
+          this.cachedFormOptions = null;
+          this.formOptionsCachedAt = 0;
           throw new Error('マスターデータの取得に失敗しました。時間をおいて再試行してください。');
         }
 
@@ -242,6 +272,19 @@ class MasterApiClient {
           }));
         } else {
           this.cachedLiftOperators = [];
+        }
+
+        // Populate Loose Item Creators
+        if (Array.isArray(payload.looseItemCreators)) {
+          this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+            looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+            looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+            baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+            isEnabled: c.isEnabled !== false,
+            sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+          }));
+        } else {
+          this.cachedLooseItemCreators = [];
         }
 
         // Populate Areas (derived from Bases, AccessContext, Partners)
@@ -312,6 +355,230 @@ class MasterApiClient {
     });
 
     return list;
+  }
+
+  /**
+   * Loose Item Creator lookup for a specific Base.
+   *
+   * @param {Object} [filter]
+   * @param {string} [filter.baseCode]
+   * @param {boolean} [filter.forceRefresh]
+   * @return {Promise<Array<Object>>}
+   */
+  async getLooseItemCreators(filter = {}) {
+    const { baseCode = '', query = '', forceRefresh = false } = filter;
+
+    await this.loadFormOptions(Boolean(forceRefresh));
+
+    let list = Array.isArray(this.cachedLooseItemCreators) ? [...this.cachedLooseItemCreators] : [];
+    list = list.filter(c => c.isEnabled !== false);
+
+    if (baseCode) {
+      list = list.filter(c => c.baseCode === baseCode);
+    }
+
+    if (query && query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter(c =>
+        c.looseItemCreatorName.toLowerCase().includes(q) ||
+        c.looseItemCreatorCode.toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      const soA = a.sortOrder !== undefined ? a.sortOrder : 999;
+      const soB = b.sortOrder !== undefined ? b.sortOrder : 999;
+      if (soA !== soB) return soA - soB;
+      return a.looseItemCreatorName.localeCompare(b.looseItemCreatorName, 'ja');
+    });
+
+    return list;
+  }
+
+  /**
+   * Fetches both LiftOperators and LooseItemCreators for the logged-in employee's Base.
+   */
+  async listBaseStaff(options = {}) {
+    const { baseCode = '', forceRefresh = false } = options;
+    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+      ? (window.shippingClient || window.shipmentClient)
+      : null);
+
+    if (shipmentClient && typeof shipmentClient.listBaseStaff === 'function') {
+      try {
+        const res = await shipmentClient.listBaseStaff();
+        const payload = (res && res.payload) ? res.payload : res;
+        if (payload && typeof payload === 'object') {
+          if (Array.isArray(payload.liftOperators)) {
+            this.cachedLiftOperators = payload.liftOperators.map(op => ({
+              liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+              liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+              baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+              partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+              isEnabled: op.isEnabled !== false,
+              sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+            }));
+            if (this.cachedFormOptions) {
+              this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+            }
+          }
+          if (Array.isArray(payload.looseItemCreators)) {
+            this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+              looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+              looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+              baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+              isEnabled: c.isEnabled !== false,
+              sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+            }));
+            if (this.cachedFormOptions) {
+              this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+            }
+          }
+          return {
+            baseCode: String(payload.baseCode || baseCode || '').trim(),
+            baseName: String(payload.baseName || '').trim(),
+            liftOperators: this.cachedLiftOperators || [],
+            looseItemCreators: this.cachedLooseItemCreators || []
+          };
+        }
+      } catch (err) {
+        const isDev = this._isDevEnv();
+        const hasFixtures = typeof window !== 'undefined'
+          && (window.__SHIPPING_ERROR_MASTER_FIXTURES__ || window.__SHIPPING_ERROR_LIFT_OPERATORS__);
+        if (!hasFixtures && !isDev) {
+          this.cachedLiftOperators = [];
+          this.cachedLooseItemCreators = [];
+          throw err;
+        }
+      }
+    }
+
+    const [liftOperators, looseItemCreators] = await Promise.all([
+      this.getLiftOperators({ baseCode, forceRefresh }),
+      this.getLooseItemCreators({ baseCode, forceRefresh })
+    ]);
+    return {
+      baseCode,
+      baseName: '',
+      liftOperators,
+      looseItemCreators
+    };
+  }
+
+  /**
+   * Registers a new LiftOperator for the logged-in employee's Base and updates local cache immediately.
+   */
+  async createLiftOperator(liftOperatorName) {
+    const trimmed = String(liftOperatorName || '').trim();
+    if (!trimmed) {
+      throw new Error('リフトマン氏名を入力してください。');
+    }
+
+    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+      ? (window.shippingClient || window.shipmentClient)
+      : null);
+
+    if (shipmentClient && typeof shipmentClient.createLiftOperator === 'function') {
+      const res = await shipmentClient.createLiftOperator(trimmed);
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.liftOperators)) {
+        this.cachedLiftOperators = payload.liftOperators.map(op => ({
+          liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+          liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+          baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+          partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          isEnabled: op.isEnabled !== false,
+          sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+        }
+      }
+      return payload;
+    }
+
+    const rpc = this._resolveRpcClient();
+    const token = this._resolveSessionToken();
+    if (rpc && token) {
+      const res = await rpc.call('liftOperator.create', {
+        sessionToken: token,
+        request: { liftOperatorName: trimmed }
+      }, { isMutation: true });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.liftOperators)) {
+        this.cachedLiftOperators = payload.liftOperators.map(op => ({
+          liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+          liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+          baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+          partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          isEnabled: op.isEnabled !== false,
+          sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+        }
+      }
+      return payload;
+    }
+
+    throw new Error('通信クライアントが初期化されていないため、リフトマンを追加できません。');
+  }
+
+  /**
+   * Registers a new LooseItemCreator for the logged-in employee's Base and updates local cache immediately.
+   */
+  async createLooseItemCreator(looseItemCreatorName) {
+    const trimmed = String(looseItemCreatorName || '').trim();
+    if (!trimmed) {
+      throw new Error('バラ作成担当者氏名を入力してください。');
+    }
+
+    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+      ? (window.shippingClient || window.shipmentClient)
+      : null);
+
+    if (shipmentClient && typeof shipmentClient.createLooseItemCreator === 'function') {
+      const res = await shipmentClient.createLooseItemCreator(trimmed);
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.looseItemCreators)) {
+        this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+          looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+          looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+          baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          isEnabled: c.isEnabled !== false,
+          sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+        }
+      }
+      return payload;
+    }
+
+    const rpc = this._resolveRpcClient();
+    const token = this._resolveSessionToken();
+    if (rpc && token) {
+      const res = await rpc.call('looseItemCreator.create', {
+        sessionToken: token,
+        request: { looseItemCreatorName: trimmed }
+      }, { isMutation: true });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.looseItemCreators)) {
+        this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+          looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+          looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+          baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          isEnabled: c.isEnabled !== false,
+          sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+        }
+      }
+      return payload;
+    }
+
+    throw new Error('通信クライアントが初期化されていないため、バラ作成担当者を追加できません。');
   }
 
   /**

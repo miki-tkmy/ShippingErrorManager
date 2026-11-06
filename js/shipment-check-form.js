@@ -50,6 +50,7 @@ class ShipmentCheckFormState {
     this.partnerResolutionState = 'none'; // 'resolved' | 'unassigned' | 'error' | 'none'
 
     // 5. Base-dependent optional fields
+    this.selectedLooseItemCreator = null; // { looseItemCreatorCode, looseItemCreatorName, baseCode }
     this.looseItemCreatorName = '';
     this.looseItemStatus = ''; // TASK-004A: flexible free-text
     this.transportCategory = '未指定';
@@ -222,11 +223,16 @@ class ShipmentCheckFormState {
       areaName: String(employee.areaName || '').trim()
     };
 
-    // TASK-005: Incompatible Lift Operator reset check
-    if (this.selectedLiftOperator && previousBaseCode && previousBaseCode !== this.currentEmployee.baseCode) {
-      if (this.selectedLiftOperator.baseCode !== this.currentEmployee.baseCode) {
-        // Reset lift operator selection on Base change
+    // TASK-005: Incompatible Lift Operator & Loose Item Creator reset check on employee/Base switch
+    if (previousBaseCode && previousBaseCode !== this.currentEmployee.baseCode) {
+      if (this.selectedLiftOperator && this.selectedLiftOperator.baseCode !== this.currentEmployee.baseCode) {
         this.clearLiftOperator();
+      }
+      if (this.selectedLooseItemCreator && this.selectedLooseItemCreator.baseCode !== this.currentEmployee.baseCode) {
+        this.clearLooseItemCreator();
+      } else {
+        this.looseItemCreatorName = '';
+        this.selectedLooseItemCreator = null;
       }
     }
 
@@ -249,6 +255,7 @@ class ShipmentCheckFormState {
     }
     this.currentEmployee = null;
     this.clearLiftOperator();
+    this.clearLooseItemCreator();
   }
 
   /**
@@ -303,6 +310,31 @@ class ShipmentCheckFormState {
   clearLiftOperator() {
     this.selectedLiftOperator = null;
     this.partnerResolutionState = 'none';
+  }
+
+  selectLooseItemCreator(creator) {
+    if (!creator) {
+      this.clearLooseItemCreator();
+      return;
+    }
+    const cleanCode = String(creator.looseItemCreatorCode || '').trim();
+    const cleanName = String(creator.looseItemCreatorName || '').trim();
+    const cleanBase = String(creator.baseCode || '').trim();
+    if (!cleanName) {
+      this.clearLooseItemCreator();
+      return;
+    }
+    this.selectedLooseItemCreator = {
+      looseItemCreatorCode: cleanCode,
+      looseItemCreatorName: cleanName,
+      baseCode: cleanBase
+    };
+    this.looseItemCreatorName = cleanName;
+  }
+
+  clearLooseItemCreator() {
+    this.selectedLooseItemCreator = null;
+    this.looseItemCreatorName = '';
   }
 
   setShowAllDrivers(val) {
@@ -518,6 +550,7 @@ class ShipmentCheckFormState {
 
     this.totalMaterialTypeCount = 1;
     this.hasLooseItems = true;
+    this.selectedLooseItemCreator = null;
     this.looseItemCreatorName = '';
     this.looseItemStatus = '';
     this.transportCategory = '未指定';

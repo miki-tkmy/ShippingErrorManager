@@ -2359,3 +2359,114 @@ body {
   border-radius: var(--radius-md);
 }
 
+/* Base-Scoped Staff Settings View (PC & iPhone Responsive) */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-section-card {
+  margin-bottom: 0;
+}
+
+.settings-add-row {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: stretch;
+}
+
+.settings-add-row .form-control {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .settings-add-row {
+    flex-direction: column;
+  }
+  .settings-add-btn {
+    width: 100%;
+  }
+}
+
+.settings-list-header {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-xs);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-empty-state {
+  padding: 20px 12px;
+  text-align: center;
+  color: var(--color-text-muted);
+  background-color: #F8FAFC;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+
+.settings-staff-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.settings-staff-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background-color: #F8FAFC;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-main);
+}
+
+.settings-staff-item-base {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background-color: #E2E8F0;
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+
+.settings-feedback-msg {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-feedback-msg.is-success {
+  background-color: #ECFDF5;
+  color: #065F46;
+  border: 1px solid #A7F3D0;
+}
+
+.settings-feedback-msg.is-error {
+  background-color: #FEF2F2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+
