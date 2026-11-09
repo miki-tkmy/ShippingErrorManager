@@ -277,6 +277,9 @@ class ShipmentCheckFormState {
     if (!partnerCode) {
       resolutionState = 'unassigned';
       resolvedPartnerName = '協力会社未設定';
+    } else if (operator.partnerName && String(operator.partnerName).trim() !== '') {
+      resolvedPartnerName = String(operator.partnerName).trim();
+      resolutionState = 'resolved';
     } else {
       try {
         const partner = await this.masterClient.getPartnerByCode(partnerCode);
@@ -320,6 +323,8 @@ class ShipmentCheckFormState {
     const cleanCode = String(creator.looseItemCreatorCode || '').trim();
     const cleanName = String(creator.looseItemCreatorName || '').trim();
     const cleanBase = String(creator.baseCode || '').trim();
+    const cleanPartnerCode = String(creator.partnerCode || '').trim();
+    const cleanPartnerName = String(creator.partnerName || '').trim();
     if (!cleanName) {
       this.clearLooseItemCreator();
       return;
@@ -327,7 +332,9 @@ class ShipmentCheckFormState {
     this.selectedLooseItemCreator = {
       looseItemCreatorCode: cleanCode,
       looseItemCreatorName: cleanName,
-      baseCode: cleanBase
+      baseCode: cleanBase,
+      partnerCode: cleanPartnerCode,
+      partnerName: cleanPartnerName
     };
     this.looseItemCreatorName = cleanName;
   }

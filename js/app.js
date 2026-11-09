@@ -415,12 +415,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingsBaseErrorBanner = document.getElementById('settingsBaseErrorBanner');
   const lblSettingsLiftOperatorCount = document.getElementById('lblSettingsLiftOperatorCount');
   const txtNewLiftOperatorName = document.getElementById('txtNewLiftOperatorName');
+  const selNewLiftOperatorPartner = document.getElementById('selNewLiftOperatorPartner');
+  const hintLiftOperatorPartnerZero = document.getElementById('hintLiftOperatorPartnerZero');
   const btnAddLiftOperator = document.getElementById('btnAddLiftOperator');
   const msgSettingsLiftOperator = document.getElementById('msgSettingsLiftOperator');
   const emptySettingsLiftOperators = document.getElementById('emptySettingsLiftOperators');
   const listSettingsLiftOperators = document.getElementById('listSettingsLiftOperators');
   const lblSettingsLooseItemCreatorCount = document.getElementById('lblSettingsLooseItemCreatorCount');
   const txtNewLooseItemCreatorName = document.getElementById('txtNewLooseItemCreatorName');
+  const selNewLooseItemCreatorPartner = document.getElementById('selNewLooseItemCreatorPartner');
+  const hintLooseItemCreatorPartnerZero = document.getElementById('hintLooseItemCreatorPartnerZero');
   const btnAddLooseItemCreator = document.getElementById('btnAddLooseItemCreator');
   const msgSettingsLooseItemCreator = document.getElementById('msgSettingsLooseItemCreator');
   const emptySettingsLooseItemCreators = document.getElementById('emptySettingsLooseItemCreators');
@@ -428,6 +432,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let currentBaseLiftOperators = [];
   let currentBaseLooseItemCreators = [];
+  let currentBasePartners = [];
 
   const masterErrorBanner = document.getElementById('masterErrorBanner');
   const masterErrorMessage = document.getElementById('masterErrorMessage');
@@ -599,6 +604,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function clearBaseStaffDropdownsAndSettingsUI() {
     currentBaseLiftOperators = [];
     currentBaseLooseItemCreators = [];
+    currentBasePartners = [];
 
     if (selLiftOperator) {
       selLiftOperator.innerHTML = '<option value="">-- リフトマンを選択してください --</option>';
@@ -643,6 +649,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       txtNewLiftOperatorName.value = '';
       txtNewLiftOperatorName.disabled = false;
     }
+    if (selNewLiftOperatorPartner) {
+      selNewLiftOperatorPartner.innerHTML = '<option value="">-- 所属協力会社を選択してください --</option>';
+      selNewLiftOperatorPartner.value = '';
+      selNewLiftOperatorPartner.disabled = false;
+    }
+    if (hintLiftOperatorPartnerZero) {
+      hintLiftOperatorPartnerZero.style.display = 'none';
+    }
     if (btnAddLiftOperator) {
       btnAddLiftOperator.disabled = false;
     }
@@ -659,6 +673,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (txtNewLooseItemCreatorName) {
       txtNewLooseItemCreatorName.value = '';
       txtNewLooseItemCreatorName.disabled = false;
+    }
+    if (selNewLooseItemCreatorPartner) {
+      selNewLooseItemCreatorPartner.innerHTML = '<option value="">-- 所属協力会社を選択してください --</option>';
+      selNewLooseItemCreatorPartner.value = '';
+      selNewLooseItemCreatorPartner.disabled = false;
+    }
+    if (hintLooseItemCreatorPartnerZero) {
+      hintLooseItemCreatorPartnerZero.style.display = 'none';
     }
     if (btnAddLooseItemCreator) {
       btnAddLooseItemCreator.disabled = false;
@@ -686,13 +708,95 @@ document.addEventListener('DOMContentLoaded', async () => {
     return trimmed;
   }
 
-  // Populate LiftOperator & LooseItemCreator dropdowns strictly for caller's Base
+  function formatStaffDropdownLabel(staffName, partnerName) {
+    const cleanName = String(staffName || '').trim();
+    const cleanPartner = String(partnerName || '').trim();
+    return cleanPartner ? `${cleanName}（${cleanPartner}）` : cleanName;
+  }
+
+  function populateSettingsPartnerSelects(partners, options = {}) {
+    const safePartners = Array.isArray(partners) ? partners : [];
+    const baseUnassigned = Boolean(options.baseUnassigned);
+    const hasError = Boolean(options.hasError);
+
+    const configureSelect = (selectEl, zeroHintEl, addBtnEl, nameInputEl) => {
+      if (!selectEl) return;
+      const prevVal = selectEl.value || '';
+      selectEl.innerHTML = '';
+
+      if (baseUnassigned) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '所属Baseが未設定のため選択できません';
+        selectEl.appendChild(opt);
+        selectEl.value = '';
+        selectEl.disabled = true;
+        if (zeroHintEl) zeroHintEl.style.display = 'none';
+        if (addBtnEl) addBtnEl.disabled = true;
+        if (nameInputEl) nameInputEl.disabled = true;
+        return;
+      }
+
+      if (hasError) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '協力会社一覧の取得に失敗しました';
+        selectEl.appendChild(opt);
+        selectEl.value = '';
+        selectEl.disabled = true;
+        if (zeroHintEl) zeroHintEl.style.display = 'none';
+        if (addBtnEl) addBtnEl.disabled = true;
+        return;
+      }
+
+      if (safePartners.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'この拠点に登録された協力会社がありません';
+        selectEl.appendChild(opt);
+        selectEl.value = '';
+        selectEl.disabled = true;
+        if (zeroHintEl) {
+          zeroHintEl.textContent = 'この拠点に登録された協力会社がありません（CompanyMaster_Partnerを確認してください）';
+          zeroHintEl.style.display = 'block';
+        }
+        if (addBtnEl) addBtnEl.disabled = true;
+        return;
+      }
+
+      if (zeroHintEl) zeroHintEl.style.display = 'none';
+      selectEl.disabled = false;
+      if (addBtnEl) addBtnEl.disabled = false;
+      if (nameInputEl) nameInputEl.disabled = false;
+
+      const placeholderOpt = document.createElement('option');
+      placeholderOpt.value = '';
+      placeholderOpt.textContent = '-- 所属協力会社を選択してください --';
+      selectEl.appendChild(placeholderOpt);
+
+      safePartners.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.partnerCode;
+        opt.textContent = p.partnerName || p.partnerCode;
+        selectEl.appendChild(opt);
+      });
+
+      const stillValid = safePartners.some(p => p.partnerCode === prevVal);
+      selectEl.value = stillValid ? prevVal : '';
+    };
+
+    configureSelect(selNewLiftOperatorPartner, hintLiftOperatorPartnerZero, btnAddLiftOperator, txtNewLiftOperatorName);
+    configureSelect(selNewLooseItemCreatorPartner, hintLooseItemCreatorPartnerZero, btnAddLooseItemCreator, txtNewLooseItemCreatorName);
+  }
+
+  // Populate LiftOperator, LooseItemCreator & Partner dropdowns strictly for caller's Base
   async function populateBaseStaffDropdowns(forceRefresh = false) {
     const currentBaseCode = resolveEffectiveBaseCode();
 
     if (!currentBaseCode) {
       currentBaseLiftOperators = [];
       currentBaseLooseItemCreators = [];
+      currentBasePartners = [];
       formState.clearLiftOperator();
       if (typeof formState.clearLooseItemCreator === 'function') {
         formState.clearLooseItemCreator();
@@ -715,18 +819,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         looseItemCreatorEmptyNotice.textContent = '所属Baseが設定されていないため、担当者の追加・選択はできません。';
         looseItemCreatorEmptyNotice.style.display = 'block';
       }
+      populateSettingsPartnerSelects([], { baseUnassigned: true });
       updateLiftOperatorUI();
-      return { baseCode: '', liftOperators: [], looseItemCreators: [], baseUnassigned: true };
+      return { baseCode: '', partners: [], liftOperators: [], looseItemCreators: [], baseUnassigned: true };
     }
 
     try {
       let liftOps = [];
       let looseCreators = [];
+      let basePartners = [];
 
       if (masterClient && typeof masterClient.listBaseStaff === 'function') {
-        const res = await masterClient.listBaseStaff({ forceRefresh: Boolean(forceRefresh) });
+        const res = await masterClient.listBaseStaff({ baseCode: currentBaseCode, forceRefresh: Boolean(forceRefresh) });
         liftOps = Array.isArray(res && res.liftOperators) ? res.liftOperators : [];
         looseCreators = Array.isArray(res && res.looseItemCreators) ? res.looseItemCreators : [];
+        basePartners = Array.isArray(res && res.partners)
+          ? res.partners
+          : (Array.isArray(res && res.basePartners) ? res.basePartners : []);
       } else {
         liftOps = await masterClient.getLiftOperators({
           baseCode: currentBaseCode,
@@ -736,15 +845,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         looseCreators = (typeof masterClient.getLooseItemCreators === 'function')
           ? await masterClient.getLooseItemCreators({ baseCode: currentBaseCode, forceRefresh: Boolean(forceRefresh) })
           : [];
+        basePartners = Array.isArray(masterClient.cachedBasePartners)
+          ? masterClient.cachedBasePartners
+          : (Array.isArray(masterClient.cachedPartners)
+            ? masterClient.cachedPartners.filter(p => String(p.baseCode || '') === currentBaseCode)
+            : []);
       }
 
       // Defense-in-depth: strictly filter to caller's BaseCode and active records only
+      currentBasePartners = (basePartners || []).filter(p =>
+        p && Boolean(p.partnerCode) && String(p.baseCode || '') === currentBaseCode
+      );
+      const partnerNameByCode = {};
+      currentBasePartners.forEach(p => {
+        partnerNameByCode[p.partnerCode] = p.partnerName || '';
+      });
+
       currentBaseLiftOperators = (liftOps || []).filter(op =>
         op && op.isActive !== false && String(op.baseCode || '') === currentBaseCode
-      );
+      ).map(op => {
+        const pCode = String(op.partnerCode || '').trim();
+        const pName = String(op.partnerName || partnerNameByCode[pCode] || '').trim();
+        return Object.assign({}, op, { partnerCode: pCode, partnerName: pName });
+      });
+
       currentBaseLooseItemCreators = (looseCreators || []).filter(c =>
         c && c.isActive !== false && String(c.baseCode || '') === currentBaseCode
-      );
+      ).map(c => {
+        const pCode = String(c.partnerCode || '').trim();
+        const pName = String(c.partnerName || partnerNameByCode[pCode] || '').trim();
+        return Object.assign({}, c, { partnerCode: pCode, partnerName: pName });
+      });
+
+      populateSettingsPartnerSelects(currentBasePartners, { baseUnassigned: false });
 
       // Rebuild #selLiftOperator dropdown
       if (selLiftOperator) {
@@ -767,7 +900,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           currentBaseLiftOperators.forEach(op => {
             const opt = document.createElement('option');
             opt.value = op.liftOperatorCode;
-            opt.textContent = op.liftOperatorName;
+            opt.textContent = formatStaffDropdownLabel(op.liftOperatorName, op.partnerName);
             selLiftOperator.appendChild(opt);
           });
           if (baseDriverEmptyNotice) {
@@ -808,7 +941,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const opt = document.createElement('option');
             opt.value = c.looseItemCreatorName;
             opt.setAttribute('data-code', c.looseItemCreatorCode || '');
-            opt.textContent = c.looseItemCreatorName;
+            opt.textContent = formatStaffDropdownLabel(c.looseItemCreatorName, c.partnerName);
             txtLooseItemCreator.appendChild(opt);
           });
           if (looseItemCreatorEmptyNotice) {
@@ -834,6 +967,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateLiftOperatorUI();
       return {
         baseCode: currentBaseCode,
+        partners: currentBasePartners,
         liftOperators: currentBaseLiftOperators,
         looseItemCreators: currentBaseLooseItemCreators,
         baseUnassigned: false
@@ -843,6 +977,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.warn('populateBaseStaffDropdowns failed:', err);
       currentBaseLiftOperators = [];
       currentBaseLooseItemCreators = [];
+      currentBasePartners = [];
       formState.clearLiftOperator();
       if (typeof formState.clearLooseItemCreator === 'function') {
         formState.clearLooseItemCreator();
@@ -857,9 +992,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         txtLooseItemCreator.innerHTML = '<option value="">担当者一覧の取得に失敗しました</option>';
         txtLooseItemCreator.value = '';
       }
+      populateSettingsPartnerSelects([], { hasError: true });
       updateLiftOperatorUI();
       return {
         baseCode: currentBaseCode,
+        partners: [],
         liftOperators: [],
         looseItemCreators: [],
         error: err
@@ -1817,11 +1954,27 @@ document.addEventListener('DOMContentLoaded', async () => {
           const nameSpan = document.createElement('span');
           nameSpan.className = 'settings-staff-name';
           nameSpan.textContent = op.liftOperatorName || '';
+
+          const rightWrap = document.createElement('div');
+          rightWrap.style.display = 'inline-flex';
+          rightWrap.style.alignItems = 'center';
+          rightWrap.style.gap = '8px';
+
+          const partnerSpan = document.createElement('span');
+          const resolvedPartnerName = String(op.partnerName || '').trim();
+          partnerSpan.className = resolvedPartnerName
+            ? 'settings-staff-partner-badge'
+            : 'settings-staff-partner-badge is-unset';
+          partnerSpan.textContent = resolvedPartnerName || '協力会社未設定';
+
           const metaSpan = document.createElement('span');
           metaSpan.className = 'settings-staff-meta';
           metaSpan.textContent = `No.${idx + 1}`;
+
+          rightWrap.appendChild(partnerSpan);
+          rightWrap.appendChild(metaSpan);
           li.appendChild(nameSpan);
-          li.appendChild(metaSpan);
+          li.appendChild(rightWrap);
           listSettingsLiftOperators.appendChild(li);
         });
       }
@@ -1842,11 +1995,27 @@ document.addEventListener('DOMContentLoaded', async () => {
           const nameSpan = document.createElement('span');
           nameSpan.className = 'settings-staff-name';
           nameSpan.textContent = c.looseItemCreatorName || '';
+
+          const rightWrap = document.createElement('div');
+          rightWrap.style.display = 'inline-flex';
+          rightWrap.style.alignItems = 'center';
+          rightWrap.style.gap = '8px';
+
+          const partnerSpan = document.createElement('span');
+          const resolvedPartnerName = String(c.partnerName || '').trim();
+          partnerSpan.className = resolvedPartnerName
+            ? 'settings-staff-partner-badge'
+            : 'settings-staff-partner-badge is-unset';
+          partnerSpan.textContent = resolvedPartnerName || '協力会社未設定';
+
           const metaSpan = document.createElement('span');
           metaSpan.className = 'settings-staff-meta';
           metaSpan.textContent = `No.${idx + 1}`;
+
+          rightWrap.appendChild(partnerSpan);
+          rightWrap.appendChild(metaSpan);
           li.appendChild(nameSpan);
-          li.appendChild(metaSpan);
+          li.appendChild(rightWrap);
           listSettingsLooseItemCreators.appendChild(li);
         });
       }
@@ -1874,10 +2043,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         settingsBaseErrorBanner.textContent = '所属Baseが設定されていないため、担当者の追加・選択はできません。管理者へ社員マスターの所属Base設定を依頼してください。';
         settingsBaseErrorBanner.style.display = 'block';
       }
-      if (txtNewLiftOperatorName) txtNewLiftOperatorName.disabled = true;
-      if (btnAddLiftOperator) btnAddLiftOperator.disabled = true;
-      if (txtNewLooseItemCreatorName) txtNewLooseItemCreatorName.disabled = true;
-      if (btnAddLooseItemCreator) btnAddLooseItemCreator.disabled = true;
+      populateSettingsPartnerSelects([], { baseUnassigned: true });
       renderSettingsStaffLists([], []);
       return;
     }
@@ -1886,10 +2052,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       settingsBaseErrorBanner.style.display = 'none';
       settingsBaseErrorBanner.textContent = '';
     }
-    if (txtNewLiftOperatorName) txtNewLiftOperatorName.disabled = false;
-    if (btnAddLiftOperator) btnAddLiftOperator.disabled = false;
-    if (txtNewLooseItemCreatorName) txtNewLooseItemCreatorName.disabled = false;
-    if (btnAddLooseItemCreator) btnAddLooseItemCreator.disabled = false;
 
     const result = await populateBaseStaffDropdowns(Boolean(forceRefresh));
     if (result && result.error) {
@@ -1922,28 +2084,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    const selectedPartnerCode = selNewLiftOperatorPartner ? String(selNewLiftOperatorPartner.value || '').trim() : '';
+    if (!selectedPartnerCode) {
+      showSettingsFeedback(msgSettingsLiftOperator, 'error', '所属協力会社を選択してください。');
+      return;
+    }
+
     if (btnAddLiftOperator) {
       btnAddLiftOperator.disabled = true;
       btnAddLiftOperator.textContent = '追加中...';
     }
     try {
-      await masterClient.createLiftOperator(trimmedName);
+      const createdRes = await masterClient.createLiftOperator(trimmedName, selectedPartnerCode);
       if (txtNewLiftOperatorName) {
         txtNewLiftOperatorName.value = '';
       }
       await populateBaseStaffDropdowns(true);
       renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+      const partnerName = (createdRes && createdRes.liftOperator && createdRes.liftOperator.partnerName)
+        || (currentBasePartners.find(p => p.partnerCode === selectedPartnerCode)?.partnerName)
+        || '';
       showSettingsFeedback(
         msgSettingsLiftOperator,
         'success',
-        `リフトマン「${trimmedName}」を追加しました。`
+        partnerName
+          ? `リフトマン「${trimmedName}」（${partnerName}）を追加しました。`
+          : `リフトマン「${trimmedName}」を追加しました。`
       );
     } catch (err) {
       const msg = (err && err.message) ? err.message : 'リフトマンの追加に失敗しました。';
       showSettingsFeedback(msgSettingsLiftOperator, 'error', msg);
     } finally {
       if (btnAddLiftOperator) {
-        btnAddLiftOperator.disabled = false;
+        btnAddLiftOperator.disabled = currentBasePartners.length === 0;
         btnAddLiftOperator.textContent = '追加';
       }
     }
@@ -1968,28 +2141,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    const selectedPartnerCode = selNewLooseItemCreatorPartner ? String(selNewLooseItemCreatorPartner.value || '').trim() : '';
+    if (!selectedPartnerCode) {
+      showSettingsFeedback(msgSettingsLooseItemCreator, 'error', '所属協力会社を選択してください。');
+      return;
+    }
+
     if (btnAddLooseItemCreator) {
       btnAddLooseItemCreator.disabled = true;
       btnAddLooseItemCreator.textContent = '追加中...';
     }
     try {
-      await masterClient.createLooseItemCreator(trimmedName);
+      const createdRes = await masterClient.createLooseItemCreator(trimmedName, selectedPartnerCode);
       if (txtNewLooseItemCreatorName) {
         txtNewLooseItemCreatorName.value = '';
       }
       await populateBaseStaffDropdowns(true);
       renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+      const partnerName = (createdRes && createdRes.looseItemCreator && createdRes.looseItemCreator.partnerName)
+        || (currentBasePartners.find(p => p.partnerCode === selectedPartnerCode)?.partnerName)
+        || '';
       showSettingsFeedback(
         msgSettingsLooseItemCreator,
         'success',
-        `バラ作成担当者「${trimmedName}」を追加しました。`
+        partnerName
+          ? `バラ作成担当者「${trimmedName}」（${partnerName}）を追加しました。`
+          : `バラ作成担当者「${trimmedName}」を追加しました。`
       );
     } catch (err) {
       const msg = (err && err.message) ? err.message : 'バラ作成担当者の追加に失敗しました。';
       showSettingsFeedback(msgSettingsLooseItemCreator, 'error', msg);
     } finally {
       if (btnAddLooseItemCreator) {
-        btnAddLooseItemCreator.disabled = false;
+        btnAddLooseItemCreator.disabled = currentBasePartners.length === 0;
         btnAddLooseItemCreator.textContent = '追加';
       }
     }

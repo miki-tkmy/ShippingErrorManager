@@ -719,15 +719,27 @@
             <span class="list-count-badge" id="lblSettingsLiftOperatorCount">0名</span>
           </div>
 
-          <div class="form-group" style="margin-bottom: var(--space-md);">
+          <div class="form-group" style="margin-bottom: var(--space-sm);">
             <label class="form-label" for="txtNewLiftOperatorName">
-              <span>リフトマン氏名</span>
+              <span>リフトマン氏名 <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="text" id="txtNewLiftOperatorName" class="form-control" placeholder="例: 山田 太郎" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-md);">
+            <label class="form-label" for="selNewLiftOperatorPartner">
+              <span>所属協力会社 <span class="required-asterisk">*</span></span>
             </label>
             <div class="settings-add-row">
-              <input type="text" id="txtNewLiftOperatorName" class="form-control" placeholder="例: 山田 太郎" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+              <select id="selNewLiftOperatorPartner" class="form-control" style="min-height: 48px; font-size: 1rem; background-color: #FFFFFF;" aria-label="リフトマンの所属協力会社">
+                <option value="">-- 所属協力会社を選択してください --</option>
+              </select>
               <button type="button" class="btn btn-primary settings-add-btn" id="btnAddLiftOperator" style="min-height: 48px; padding: 0 20px; font-weight: 700; white-space: nowrap;">
                 追加
               </button>
+            </div>
+            <div id="hintLiftOperatorPartnerZero" class="settings-partner-zero-notice" style="display: none;">
+              この拠点に登録された協力会社がありません（CompanyMaster_Partnerを確認してください）
             </div>
             <div id="msgSettingsLiftOperator" class="settings-feedback-msg" style="display: none;" role="status"></div>
           </div>
@@ -746,15 +758,27 @@
             <span class="list-count-badge" id="lblSettingsLooseItemCreatorCount">0名</span>
           </div>
 
-          <div class="form-group" style="margin-bottom: var(--space-md);">
+          <div class="form-group" style="margin-bottom: var(--space-sm);">
             <label class="form-label" for="txtNewLooseItemCreatorName">
-              <span>バラ作成担当者氏名</span>
+              <span>バラ作成担当者氏名 <span class="required-asterisk">*</span></span>
+            </label>
+            <input type="text" id="txtNewLooseItemCreatorName" class="form-control" placeholder="例: 佐藤 花子" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-md);">
+            <label class="form-label" for="selNewLooseItemCreatorPartner">
+              <span>所属協力会社 <span class="required-asterisk">*</span></span>
             </label>
             <div class="settings-add-row">
-              <input type="text" id="txtNewLooseItemCreatorName" class="form-control" placeholder="例: 佐藤 花子" maxlength="100" style="min-height: 48px; font-size: 1rem;">
+              <select id="selNewLooseItemCreatorPartner" class="form-control" style="min-height: 48px; font-size: 1rem; background-color: #FFFFFF;" aria-label="バラ作成担当者の所属協力会社">
+                <option value="">-- 所属協力会社を選択してください --</option>
+              </select>
               <button type="button" class="btn btn-primary settings-add-btn" id="btnAddLooseItemCreator" style="min-height: 48px; padding: 0 20px; font-weight: 700; white-space: nowrap;">
                 追加
               </button>
+            </div>
+            <div id="hintLooseItemCreatorPartnerZero" class="settings-partner-zero-notice" style="display: none;">
+              この拠点に登録された協力会社がありません（CompanyMaster_Partnerを確認してください）
             </div>
             <div id="msgSettingsLooseItemCreator" class="settings-feedback-msg" style="display: none;" role="status"></div>
           </div>

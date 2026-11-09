@@ -18,6 +18,7 @@ class MasterApiClient {
     this.cachedFormOptions = null;
     this.cachedEmployees = null;
     this.cachedPartners = null;
+    this.cachedBasePartners = null;
     this.cachedBases = null;
     this.cachedAreas = null;
     this.cachedMaterials = null;
@@ -34,6 +35,7 @@ class MasterApiClient {
     this.cachedFormOptions = null;
     this.cachedEmployees = null;
     this.cachedPartners = null;
+    this.cachedBasePartners = null;
     this.cachedBases = null;
     this.cachedAreas = null;
     this.cachedMaterials = null;
@@ -84,6 +86,7 @@ class MasterApiClient {
       liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
       baseCode: String(op.baseCode || op.BaseCode || '').trim(),
       partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+      partnerName: String(op.partnerName || op.PartnerName || '').trim(),
       isEnabled: op.isEnabled !== false,
       sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
     })) : [];
@@ -93,6 +96,8 @@ class MasterApiClient {
       looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
       looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
       baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+      partnerCode: String(c.partnerCode || c.PartnerCode || '').trim(),
+      partnerName: String(c.partnerName || c.PartnerName || '').trim(),
       isEnabled: c.isEnabled !== false,
       sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
     })) : [];
@@ -162,6 +167,7 @@ class MasterApiClient {
             if (!hasFixtures && !isDev) {
               this.cachedLiftOperators = [];
               this.cachedLooseItemCreators = [];
+              this.cachedBasePartners = [];
               this.cachedFormOptions = null;
               this.formOptionsCachedAt = 0;
               throw new Error('マスターデータの取得に失敗しました。時間をおいて再試行してください。');
@@ -210,6 +216,7 @@ class MasterApiClient {
         if (!payload || typeof payload !== 'object') {
           this.cachedLiftOperators = [];
           this.cachedLooseItemCreators = [];
+          this.cachedBasePartners = [];
           this.cachedFormOptions = null;
           this.formOptionsCachedAt = 0;
           throw new Error('マスターデータの取得に失敗しました。時間をおいて再試行してください。');
@@ -260,29 +267,64 @@ class MasterApiClient {
           this.cachedPartners = [];
         }
 
+        if (Array.isArray(payload.basePartners)) {
+          this.cachedBasePartners = payload.basePartners.map(p => ({
+            partnerCode: String(p.partnerCode || p.PartnerCode || '').trim(),
+            partnerName: String(p.partnerName || p.PartnerName || '').trim(),
+            baseCode: String(p.baseCode || p.BaseCode || '').trim(),
+            baseName: String(p.baseName || p.BaseName || '').trim(),
+            areaCode: p.areaCode || p.AreaCode || null,
+            areaName: String(p.areaName || p.AreaName || '').trim()
+          }));
+        } else {
+          const callerBase = String(payload.baseCode || payload.callerBaseCode || '').trim();
+          this.cachedBasePartners = callerBase
+            ? (this.cachedPartners || []).filter(p => p.baseCode === callerBase)
+            : [];
+        }
+
+        const partnerNameByCode = {};
+        (this.cachedPartners || []).forEach(p => {
+          if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+        });
+        (this.cachedBasePartners || []).forEach(p => {
+          if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+        });
+
         // Populate Lift Operators
         if (Array.isArray(payload.liftOperators)) {
-          this.cachedLiftOperators = payload.liftOperators.map(op => ({
-            liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
-            liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
-            baseCode: String(op.baseCode || op.BaseCode || '').trim(),
-            partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
-            isEnabled: op.isEnabled !== false,
-            sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
-          }));
+          this.cachedLiftOperators = payload.liftOperators.map(op => {
+            const pCode = String(op.partnerCode || op.PartnerCode || '').trim();
+            const pName = String(op.partnerName || op.PartnerName || partnerNameByCode[pCode] || '').trim();
+            return {
+              liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+              liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+              baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+              partnerCode: pCode,
+              partnerName: pName,
+              isEnabled: op.isEnabled !== false,
+              sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+            };
+          });
         } else {
           this.cachedLiftOperators = [];
         }
 
         // Populate Loose Item Creators
         if (Array.isArray(payload.looseItemCreators)) {
-          this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
-            looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
-            looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
-            baseCode: String(c.baseCode || c.BaseCode || '').trim(),
-            isEnabled: c.isEnabled !== false,
-            sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
-          }));
+          this.cachedLooseItemCreators = payload.looseItemCreators.map(c => {
+            const pCode = String(c.partnerCode || c.PartnerCode || '').trim();
+            const pName = String(c.partnerName || c.PartnerName || partnerNameByCode[pCode] || '').trim();
+            return {
+              looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+              looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+              baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+              partnerCode: pCode,
+              partnerName: pName,
+              isEnabled: c.isEnabled !== false,
+              sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+            };
+          });
         } else {
           this.cachedLooseItemCreators = [];
         }
@@ -396,7 +438,7 @@ class MasterApiClient {
   }
 
   /**
-   * Fetches both LiftOperators and LooseItemCreators for the logged-in employee's Base.
+   * Fetches LiftOperators, LooseItemCreators, and Base-scoped Partner companies for the logged-in employee's Base.
    */
   async listBaseStaff(options = {}) {
     const { baseCode = '', forceRefresh = false } = options;
@@ -409,34 +451,68 @@ class MasterApiClient {
         const res = await shipmentClient.listBaseStaff();
         const payload = (res && res.payload) ? res.payload : res;
         if (payload && typeof payload === 'object') {
+          const resolvedBaseCode = String(payload.baseCode || baseCode || '').trim();
+          const rawPartners = Array.isArray(payload.partners)
+            ? payload.partners
+            : (Array.isArray(payload.basePartners) ? payload.basePartners : []);
+          this.cachedBasePartners = rawPartners.map(p => ({
+            partnerCode: String(p.partnerCode || p.PartnerCode || '').trim(),
+            partnerName: String(p.partnerName || p.PartnerName || '').trim(),
+            baseCode: String(p.baseCode || p.BaseCode || resolvedBaseCode || '').trim(),
+            baseName: String(p.baseName || p.BaseName || '').trim(),
+            areaCode: p.areaCode || p.AreaCode || null,
+            areaName: String(p.areaName || p.AreaName || '').trim()
+          })).filter(p => Boolean(p.partnerCode) && (!resolvedBaseCode || p.baseCode === resolvedBaseCode));
+
+          const partnerNameByCode = {};
+          (this.cachedPartners || []).forEach(p => {
+            if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+          });
+          (this.cachedBasePartners || []).forEach(p => {
+            if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+          });
+
           if (Array.isArray(payload.liftOperators)) {
-            this.cachedLiftOperators = payload.liftOperators.map(op => ({
-              liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
-              liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
-              baseCode: String(op.baseCode || op.BaseCode || '').trim(),
-              partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
-              isEnabled: op.isEnabled !== false,
-              sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
-            }));
+            this.cachedLiftOperators = payload.liftOperators.map(op => {
+              const pCode = String(op.partnerCode || op.PartnerCode || '').trim();
+              const pName = String(op.partnerName || op.PartnerName || partnerNameByCode[pCode] || '').trim();
+              return {
+                liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+                liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+                baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+                partnerCode: pCode,
+                partnerName: pName,
+                isEnabled: op.isEnabled !== false,
+                sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+              };
+            });
             if (this.cachedFormOptions) {
               this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
             }
           }
           if (Array.isArray(payload.looseItemCreators)) {
-            this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
-              looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
-              looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
-              baseCode: String(c.baseCode || c.BaseCode || '').trim(),
-              isEnabled: c.isEnabled !== false,
-              sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
-            }));
+            this.cachedLooseItemCreators = payload.looseItemCreators.map(c => {
+              const pCode = String(c.partnerCode || c.PartnerCode || '').trim();
+              const pName = String(c.partnerName || c.PartnerName || partnerNameByCode[pCode] || '').trim();
+              return {
+                looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+                looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+                baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+                partnerCode: pCode,
+                partnerName: pName,
+                isEnabled: c.isEnabled !== false,
+                sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+              };
+            });
             if (this.cachedFormOptions) {
               this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
             }
           }
           return {
-            baseCode: String(payload.baseCode || baseCode || '').trim(),
+            baseCode: resolvedBaseCode,
             baseName: String(payload.baseName || '').trim(),
+            partners: this.cachedBasePartners || [],
+            basePartners: this.cachedBasePartners || [],
             liftOperators: this.cachedLiftOperators || [],
             looseItemCreators: this.cachedLooseItemCreators || []
           };
@@ -448,6 +524,7 @@ class MasterApiClient {
         if (!hasFixtures && !isDev) {
           this.cachedLiftOperators = [];
           this.cachedLooseItemCreators = [];
+          this.cachedBasePartners = [];
           throw err;
         }
       }
@@ -457,9 +534,16 @@ class MasterApiClient {
       this.getLiftOperators({ baseCode, forceRefresh }),
       this.getLooseItemCreators({ baseCode, forceRefresh })
     ]);
+    const basePartners = Array.isArray(this.cachedBasePartners) && this.cachedBasePartners.length > 0
+      ? this.cachedBasePartners.filter(p => !baseCode || p.baseCode === baseCode)
+      : (Array.isArray(this.cachedPartners)
+        ? this.cachedPartners.filter(p => baseCode && p.baseCode === baseCode)
+        : []);
     return {
       baseCode,
       baseName: '',
+      partners: basePartners,
+      basePartners,
       liftOperators,
       looseItemCreators
     };
@@ -468,10 +552,24 @@ class MasterApiClient {
   /**
    * Registers a new LiftOperator for the logged-in employee's Base and updates local cache immediately.
    */
-  async createLiftOperator(liftOperatorName) {
-    const trimmed = String(liftOperatorName || '').trim();
+  async createLiftOperator(liftOperatorNameOrRequest, partnerCode) {
+    let rawName = liftOperatorNameOrRequest;
+    let rawPartnerCode = partnerCode;
+    if (liftOperatorNameOrRequest && typeof liftOperatorNameOrRequest === 'object') {
+      rawName = liftOperatorNameOrRequest.liftOperatorName !== undefined
+        ? liftOperatorNameOrRequest.liftOperatorName
+        : liftOperatorNameOrRequest.name;
+      rawPartnerCode = liftOperatorNameOrRequest.partnerCode !== undefined
+        ? liftOperatorNameOrRequest.partnerCode
+        : liftOperatorNameOrRequest.PartnerCode;
+    }
+    const trimmed = String(rawName || '').trim();
     if (!trimmed) {
       throw new Error('リフトマン氏名を入力してください。');
+    }
+    const trimmedPartnerCode = String(rawPartnerCode || '').trim();
+    if (!trimmedPartnerCode) {
+      throw new Error('所属協力会社を選択してください。');
     }
 
     const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
@@ -479,7 +577,10 @@ class MasterApiClient {
       : null);
 
     if (shipmentClient && typeof shipmentClient.createLiftOperator === 'function') {
-      const res = await shipmentClient.createLiftOperator(trimmed);
+      const res = await shipmentClient.createLiftOperator({
+        liftOperatorName: trimmed,
+        partnerCode: trimmedPartnerCode
+      });
       const payload = (res && res.payload) ? res.payload : res;
       if (payload && Array.isArray(payload.liftOperators)) {
         this.cachedLiftOperators = payload.liftOperators.map(op => ({
@@ -487,6 +588,7 @@ class MasterApiClient {
           liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
           baseCode: String(op.baseCode || op.BaseCode || '').trim(),
           partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          partnerName: String(op.partnerName || op.PartnerName || '').trim(),
           isEnabled: op.isEnabled !== false,
           sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
         }));
@@ -502,7 +604,10 @@ class MasterApiClient {
     if (rpc && token) {
       const res = await rpc.call('liftOperator.create', {
         sessionToken: token,
-        request: { liftOperatorName: trimmed }
+        request: {
+          liftOperatorName: trimmed,
+          partnerCode: trimmedPartnerCode
+        }
       }, { isMutation: true });
       const payload = (res && res.payload) ? res.payload : res;
       if (payload && Array.isArray(payload.liftOperators)) {
@@ -511,6 +616,7 @@ class MasterApiClient {
           liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
           baseCode: String(op.baseCode || op.BaseCode || '').trim(),
           partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          partnerName: String(op.partnerName || op.PartnerName || '').trim(),
           isEnabled: op.isEnabled !== false,
           sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
         }));
@@ -527,10 +633,24 @@ class MasterApiClient {
   /**
    * Registers a new LooseItemCreator for the logged-in employee's Base and updates local cache immediately.
    */
-  async createLooseItemCreator(looseItemCreatorName) {
-    const trimmed = String(looseItemCreatorName || '').trim();
+  async createLooseItemCreator(looseItemCreatorNameOrRequest, partnerCode) {
+    let rawName = looseItemCreatorNameOrRequest;
+    let rawPartnerCode = partnerCode;
+    if (looseItemCreatorNameOrRequest && typeof looseItemCreatorNameOrRequest === 'object') {
+      rawName = looseItemCreatorNameOrRequest.looseItemCreatorName !== undefined
+        ? looseItemCreatorNameOrRequest.looseItemCreatorName
+        : looseItemCreatorNameOrRequest.name;
+      rawPartnerCode = looseItemCreatorNameOrRequest.partnerCode !== undefined
+        ? looseItemCreatorNameOrRequest.partnerCode
+        : looseItemCreatorNameOrRequest.PartnerCode;
+    }
+    const trimmed = String(rawName || '').trim();
     if (!trimmed) {
       throw new Error('バラ作成担当者氏名を入力してください。');
+    }
+    const trimmedPartnerCode = String(rawPartnerCode || '').trim();
+    if (!trimmedPartnerCode) {
+      throw new Error('所属協力会社を選択してください。');
     }
 
     const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
@@ -538,13 +658,18 @@ class MasterApiClient {
       : null);
 
     if (shipmentClient && typeof shipmentClient.createLooseItemCreator === 'function') {
-      const res = await shipmentClient.createLooseItemCreator(trimmed);
+      const res = await shipmentClient.createLooseItemCreator({
+        looseItemCreatorName: trimmed,
+        partnerCode: trimmedPartnerCode
+      });
       const payload = (res && res.payload) ? res.payload : res;
       if (payload && Array.isArray(payload.looseItemCreators)) {
         this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
           looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
           looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
           baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          partnerCode: String(c.partnerCode || c.PartnerCode || '').trim(),
+          partnerName: String(c.partnerName || c.PartnerName || '').trim(),
           isEnabled: c.isEnabled !== false,
           sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
         }));
@@ -560,7 +685,10 @@ class MasterApiClient {
     if (rpc && token) {
       const res = await rpc.call('looseItemCreator.create', {
         sessionToken: token,
-        request: { looseItemCreatorName: trimmed }
+        request: {
+          looseItemCreatorName: trimmed,
+          partnerCode: trimmedPartnerCode
+        }
       }, { isMutation: true });
       const payload = (res && res.payload) ? res.payload : res;
       if (payload && Array.isArray(payload.looseItemCreators)) {
@@ -568,6 +696,8 @@ class MasterApiClient {
           looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
           looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
           baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          partnerCode: String(c.partnerCode || c.PartnerCode || '').trim(),
+          partnerName: String(c.partnerName || c.PartnerName || '').trim(),
           isEnabled: c.isEnabled !== false,
           sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
         }));

@@ -2449,6 +2449,34 @@ body {
   border-radius: 9999px;
 }
 
+.settings-staff-partner-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #1E40AF;
+  background-color: #EFF6FF;
+  border: 1px solid #BFDBFE;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.settings-staff-partner-badge.is-unset {
+  color: #64748B;
+  background-color: #F1F5F9;
+  border-color: #CBD5E1;
+}
+
+.settings-partner-zero-notice {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  background-color: #FFFBEB;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
 .settings-feedback-msg {
   margin-top: 8px;
   padding: 8px 12px;

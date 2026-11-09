@@ -244,31 +244,69 @@
     });
   };
 
-  ShipmentClient.prototype.createLiftOperator = function (liftOperatorName, tokenOverride) {
-    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+  ShipmentClient.prototype.createLiftOperator = function (liftOperatorNameOrRequest, partnerCodeOrToken, tokenOverride) {
+    var reqObj;
+    var tokenArg = tokenOverride;
+    if (liftOperatorNameOrRequest && typeof liftOperatorNameOrRequest === 'object') {
+      reqObj = {
+        liftOperatorName: liftOperatorNameOrRequest.liftOperatorName !== undefined
+          ? liftOperatorNameOrRequest.liftOperatorName
+          : liftOperatorNameOrRequest.name,
+        partnerCode: liftOperatorNameOrRequest.partnerCode !== undefined
+          ? liftOperatorNameOrRequest.partnerCode
+          : liftOperatorNameOrRequest.PartnerCode
+      };
+      if (tokenArg === undefined) {
+        tokenArg = partnerCodeOrToken;
+      }
+    } else {
+      reqObj = {
+        liftOperatorName: liftOperatorNameOrRequest,
+        partnerCode: partnerCodeOrToken
+      };
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenArg);
     if (!token) {
       return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
     }
 
     return this.rpcClient.call('liftOperator.create', {
       sessionToken: token,
-      request: {
-        liftOperatorName: liftOperatorName
-      }
+      request: reqObj
     }, { isMutation: true });
   };
 
-  ShipmentClient.prototype.createLooseItemCreator = function (looseItemCreatorName, tokenOverride) {
-    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+  ShipmentClient.prototype.createLooseItemCreator = function (looseItemCreatorNameOrRequest, partnerCodeOrToken, tokenOverride) {
+    var reqObj;
+    var tokenArg = tokenOverride;
+    if (looseItemCreatorNameOrRequest && typeof looseItemCreatorNameOrRequest === 'object') {
+      reqObj = {
+        looseItemCreatorName: looseItemCreatorNameOrRequest.looseItemCreatorName !== undefined
+          ? looseItemCreatorNameOrRequest.looseItemCreatorName
+          : looseItemCreatorNameOrRequest.name,
+        partnerCode: looseItemCreatorNameOrRequest.partnerCode !== undefined
+          ? looseItemCreatorNameOrRequest.partnerCode
+          : looseItemCreatorNameOrRequest.PartnerCode
+      };
+      if (tokenArg === undefined) {
+        tokenArg = partnerCodeOrToken;
+      }
+    } else {
+      reqObj = {
+        looseItemCreatorName: looseItemCreatorNameOrRequest,
+        partnerCode: partnerCodeOrToken
+      };
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenArg);
     if (!token) {
       return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
     }
 
     return this.rpcClient.call('looseItemCreator.create', {
       sessionToken: token,
-      request: {
-        looseItemCreatorName: looseItemCreatorName
-      }
+      request: reqObj
     }, { isMutation: true });
   };
 
