@@ -25,13 +25,21 @@ class MasterApiClient {
     this.cachedLiftOperators = null;
     this.cachedLooseItemCreators = null;
     this.inFlightFormOptionsPromise = null;
+    this.inFlightBaseStaffPromise = null;
+    this.inFlightBaseStaffBaseCode = '';
     this.loadSeq = 0;
     this.formOptionsCachedAt = 0;
+    this.baseStaffCachedAt = 0;
+    this.cachedBaseStaffBaseCode = '';
+    this.cachedBaseStaffBaseName = '';
   }
 
   clearCache() {
     this.loadSeq++;
     this.formOptionsCachedAt = 0;
+    this.baseStaffCachedAt = 0;
+    this.cachedBaseStaffBaseCode = '';
+    this.cachedBaseStaffBaseName = '';
     this.cachedFormOptions = null;
     this.cachedEmployees = null;
     this.cachedPartners = null;
@@ -42,6 +50,8 @@ class MasterApiClient {
     this.cachedLiftOperators = null;
     this.cachedLooseItemCreators = null;
     this.inFlightFormOptionsPromise = null;
+    this.inFlightBaseStaffPromise = null;
+    this.inFlightBaseStaffBaseCode = '';
   }
 
   /**
@@ -439,114 +449,158 @@ class MasterApiClient {
 
   /**
    * Fetches LiftOperators, LooseItemCreators, and Base-scoped Partner companies for the logged-in employee's Base.
+   * Deduplicates concurrent requests and reuses short-TTL cached data when forceRefresh is false.
    */
   async listBaseStaff(options = {}) {
     const { baseCode = '', forceRefresh = false } = options;
-    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
-      ? (window.shippingClient || window.shipmentClient)
-      : null);
-
-    if (shipmentClient && typeof shipmentClient.listBaseStaff === 'function') {
-      try {
-        const res = await shipmentClient.listBaseStaff();
-        const payload = (res && res.payload) ? res.payload : res;
-        if (payload && typeof payload === 'object') {
-          const resolvedBaseCode = String(payload.baseCode || baseCode || '').trim();
-          const rawPartners = Array.isArray(payload.partners)
-            ? payload.partners
-            : (Array.isArray(payload.basePartners) ? payload.basePartners : []);
-          this.cachedBasePartners = rawPartners.map(p => ({
-            partnerCode: String(p.partnerCode || p.PartnerCode || '').trim(),
-            partnerName: String(p.partnerName || p.PartnerName || '').trim(),
-            baseCode: String(p.baseCode || p.BaseCode || resolvedBaseCode || '').trim(),
-            baseName: String(p.baseName || p.BaseName || '').trim(),
-            areaCode: p.areaCode || p.AreaCode || null,
-            areaName: String(p.areaName || p.AreaName || '').trim()
-          })).filter(p => Boolean(p.partnerCode) && (!resolvedBaseCode || p.baseCode === resolvedBaseCode));
-
-          const partnerNameByCode = {};
-          (this.cachedPartners || []).forEach(p => {
-            if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
-          });
-          (this.cachedBasePartners || []).forEach(p => {
-            if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
-          });
-
-          if (Array.isArray(payload.liftOperators)) {
-            this.cachedLiftOperators = payload.liftOperators.map(op => {
-              const pCode = String(op.partnerCode || op.PartnerCode || '').trim();
-              const pName = String(op.partnerName || op.PartnerName || partnerNameByCode[pCode] || '').trim();
-              return {
-                liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
-                liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
-                baseCode: String(op.baseCode || op.BaseCode || '').trim(),
-                partnerCode: pCode,
-                partnerName: pName,
-                isEnabled: op.isEnabled !== false,
-                sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
-              };
-            });
-            if (this.cachedFormOptions) {
-              this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
-            }
-          }
-          if (Array.isArray(payload.looseItemCreators)) {
-            this.cachedLooseItemCreators = payload.looseItemCreators.map(c => {
-              const pCode = String(c.partnerCode || c.PartnerCode || '').trim();
-              const pName = String(c.partnerName || c.PartnerName || partnerNameByCode[pCode] || '').trim();
-              return {
-                looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
-                looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
-                baseCode: String(c.baseCode || c.BaseCode || '').trim(),
-                partnerCode: pCode,
-                partnerName: pName,
-                isEnabled: c.isEnabled !== false,
-                sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
-              };
-            });
-            if (this.cachedFormOptions) {
-              this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
-            }
-          }
-          return {
-            baseCode: resolvedBaseCode,
-            baseName: String(payload.baseName || '').trim(),
-            partners: this.cachedBasePartners || [],
-            basePartners: this.cachedBasePartners || [],
-            liftOperators: this.cachedLiftOperators || [],
-            looseItemCreators: this.cachedLooseItemCreators || []
-          };
-        }
-      } catch (err) {
-        const isDev = this._isDevEnv();
-        const hasFixtures = typeof window !== 'undefined'
-          && (window.__SHIPPING_ERROR_MASTER_FIXTURES__ || window.__SHIPPING_ERROR_LIFT_OPERATORS__);
-        if (!hasFixtures && !isDev) {
-          this.cachedLiftOperators = [];
-          this.cachedLooseItemCreators = [];
-          this.cachedBasePartners = [];
-          throw err;
-        }
-      }
+    const normReqBase = String(baseCode || '').trim();
+    const isCacheFresh = Boolean(this.baseStaffCachedAt && (Date.now() - this.baseStaffCachedAt < 30000));
+    if (
+      !forceRefresh &&
+      isCacheFresh &&
+      Array.isArray(this.cachedBasePartners) &&
+      Array.isArray(this.cachedLiftOperators) &&
+      Array.isArray(this.cachedLooseItemCreators) &&
+      (!normReqBase || !this.cachedBaseStaffBaseCode || normReqBase === this.cachedBaseStaffBaseCode)
+    ) {
+      return {
+        baseCode: this.cachedBaseStaffBaseCode || normReqBase,
+        baseName: this.cachedBaseStaffBaseName || '',
+        partners: this.cachedBasePartners,
+        basePartners: this.cachedBasePartners,
+        liftOperators: this.cachedLiftOperators,
+        looseItemCreators: this.cachedLooseItemCreators
+      };
     }
 
-    const [liftOperators, looseItemCreators] = await Promise.all([
-      this.getLiftOperators({ baseCode, forceRefresh }),
-      this.getLooseItemCreators({ baseCode, forceRefresh })
-    ]);
-    const basePartners = Array.isArray(this.cachedBasePartners) && this.cachedBasePartners.length > 0
-      ? this.cachedBasePartners.filter(p => !baseCode || p.baseCode === baseCode)
-      : (Array.isArray(this.cachedPartners)
-        ? this.cachedPartners.filter(p => baseCode && p.baseCode === baseCode)
-        : []);
-    return {
-      baseCode,
-      baseName: '',
-      partners: basePartners,
-      basePartners,
-      liftOperators,
-      looseItemCreators
-    };
+    if (
+      this.inFlightBaseStaffPromise &&
+      (!normReqBase || !this.inFlightBaseStaffBaseCode || normReqBase === this.inFlightBaseStaffBaseCode)
+    ) {
+      return this.inFlightBaseStaffPromise;
+    }
+
+    this.inFlightBaseStaffBaseCode = normReqBase;
+    this.inFlightBaseStaffPromise = (async () => {
+      try {
+        const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+          ? (window.shippingClient || window.shipmentClient)
+          : null);
+
+        if (shipmentClient && typeof shipmentClient.listBaseStaff === 'function') {
+          try {
+            const res = await shipmentClient.listBaseStaff();
+            const payload = (res && res.payload) ? res.payload : res;
+            if (payload && typeof payload === 'object') {
+              const resolvedBaseCode = String(payload.baseCode || baseCode || '').trim();
+              const rawPartners = Array.isArray(payload.partners)
+                ? payload.partners
+                : (Array.isArray(payload.basePartners) ? payload.basePartners : []);
+              this.cachedBasePartners = rawPartners.map(p => ({
+                partnerCode: String(p.partnerCode || p.PartnerCode || '').trim(),
+                partnerName: String(p.partnerName || p.PartnerName || '').trim(),
+                baseCode: String(p.baseCode || p.BaseCode || resolvedBaseCode || '').trim(),
+                baseName: String(p.baseName || p.BaseName || '').trim(),
+                areaCode: p.areaCode || p.AreaCode || null,
+                areaName: String(p.areaName || p.AreaName || '').trim()
+              })).filter(p => Boolean(p.partnerCode) && (!resolvedBaseCode || p.baseCode === resolvedBaseCode));
+
+              const partnerNameByCode = {};
+              (this.cachedPartners || []).forEach(p => {
+                if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+              });
+              (this.cachedBasePartners || []).forEach(p => {
+                if (p.partnerCode) partnerNameByCode[p.partnerCode] = p.partnerName || '';
+              });
+
+              if (Array.isArray(payload.liftOperators)) {
+                this.cachedLiftOperators = payload.liftOperators.map(op => {
+                  const pCode = String(op.partnerCode || op.PartnerCode || '').trim();
+                  const pName = String(op.partnerName || op.PartnerName || partnerNameByCode[pCode] || '').trim();
+                  return {
+                    liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+                    liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+                    baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+                    partnerCode: pCode,
+                    partnerName: pName,
+                    isEnabled: op.isEnabled !== false,
+                    sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+                  };
+                });
+                if (this.cachedFormOptions) {
+                  this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+                }
+              }
+              if (Array.isArray(payload.looseItemCreators)) {
+                this.cachedLooseItemCreators = payload.looseItemCreators.map(c => {
+                  const pCode = String(c.partnerCode || c.PartnerCode || '').trim();
+                  const pName = String(c.partnerName || c.PartnerName || partnerNameByCode[pCode] || '').trim();
+                  return {
+                    looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+                    looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+                    baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+                    partnerCode: pCode,
+                    partnerName: pName,
+                    isEnabled: c.isEnabled !== false,
+                    sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+                  };
+                });
+                if (this.cachedFormOptions) {
+                  this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+                }
+              }
+              this.baseStaffCachedAt = Date.now();
+              this.cachedBaseStaffBaseCode = resolvedBaseCode;
+              this.cachedBaseStaffBaseName = String(payload.baseName || '').trim();
+              return {
+                baseCode: resolvedBaseCode,
+                baseName: this.cachedBaseStaffBaseName,
+                partners: this.cachedBasePartners || [],
+                basePartners: this.cachedBasePartners || [],
+                liftOperators: this.cachedLiftOperators || [],
+                looseItemCreators: this.cachedLooseItemCreators || []
+              };
+            }
+          } catch (err) {
+            const isDev = this._isDevEnv();
+            const hasFixtures = typeof window !== 'undefined'
+              && (window.__SHIPPING_ERROR_MASTER_FIXTURES__ || window.__SHIPPING_ERROR_LIFT_OPERATORS__);
+            if (!hasFixtures && !isDev) {
+              this.cachedLiftOperators = [];
+              this.cachedLooseItemCreators = [];
+              this.cachedBasePartners = [];
+              this.baseStaffCachedAt = 0;
+              throw err;
+            }
+          }
+        }
+
+        const [liftOperators, looseItemCreators] = await Promise.all([
+          this.getLiftOperators({ baseCode, forceRefresh }),
+          this.getLooseItemCreators({ baseCode, forceRefresh })
+        ]);
+        const basePartners = Array.isArray(this.cachedBasePartners) && this.cachedBasePartners.length > 0
+          ? this.cachedBasePartners.filter(p => !baseCode || p.baseCode === baseCode)
+          : (Array.isArray(this.cachedPartners)
+            ? this.cachedPartners.filter(p => baseCode && p.baseCode === baseCode)
+            : []);
+        this.baseStaffCachedAt = Date.now();
+        this.cachedBaseStaffBaseCode = normReqBase;
+        return {
+          baseCode,
+          baseName: '',
+          partners: basePartners,
+          basePartners,
+          liftOperators,
+          looseItemCreators
+        };
+      } finally {
+        this.inFlightBaseStaffPromise = null;
+        this.inFlightBaseStaffBaseCode = '';
+      }
+    })();
+
+    return this.inFlightBaseStaffPromise;
   }
 
   /**
@@ -709,6 +763,168 @@ class MasterApiClient {
     }
 
     throw new Error('通信クライアントが初期化されていないため、バラ作成担当者を追加できません。');
+  }
+
+  /**
+   * Updates the PartnerCode of an existing LiftOperator for the logged-in employee's Base and updates local cache immediately.
+   */
+  async updateLiftOperatorPartner(liftOperatorCodeOrRequest, partnerCode) {
+    let rawCode = liftOperatorCodeOrRequest;
+    let rawPartnerCode = partnerCode;
+    if (liftOperatorCodeOrRequest && typeof liftOperatorCodeOrRequest === 'object') {
+      rawCode = liftOperatorCodeOrRequest.liftOperatorCode !== undefined
+        ? liftOperatorCodeOrRequest.liftOperatorCode
+        : liftOperatorCodeOrRequest.code;
+      rawPartnerCode = liftOperatorCodeOrRequest.partnerCode !== undefined
+        ? liftOperatorCodeOrRequest.partnerCode
+        : liftOperatorCodeOrRequest.PartnerCode;
+    }
+    const trimmedCode = String(rawCode || '').trim();
+    if (!trimmedCode) {
+      throw new Error('対象のリフトマンコードが指定されていません。');
+    }
+    const trimmedPartnerCode = String(rawPartnerCode || '').trim();
+    if (!trimmedPartnerCode) {
+      throw new Error('所属協力会社を選択してください。');
+    }
+
+    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+      ? (window.shippingClient || window.shipmentClient)
+      : null);
+
+    if (shipmentClient && typeof shipmentClient.updateLiftOperatorPartner === 'function') {
+      const res = await shipmentClient.updateLiftOperatorPartner({
+        liftOperatorCode: trimmedCode,
+        partnerCode: trimmedPartnerCode
+      });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.liftOperators)) {
+        this.cachedLiftOperators = payload.liftOperators.map(op => ({
+          liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+          liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+          baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+          partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          partnerName: String(op.partnerName || op.PartnerName || '').trim(),
+          isEnabled: op.isEnabled !== false,
+          sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+        }
+      }
+      return payload;
+    }
+
+    const rpc = this._resolveRpcClient();
+    const token = this._resolveSessionToken();
+    if (rpc && token) {
+      const res = await rpc.call('liftOperator.updatePartner', {
+        sessionToken: token,
+        request: {
+          liftOperatorCode: trimmedCode,
+          partnerCode: trimmedPartnerCode
+        }
+      }, { isMutation: true });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.liftOperators)) {
+        this.cachedLiftOperators = payload.liftOperators.map(op => ({
+          liftOperatorCode: String(op.liftOperatorCode || op.LiftOperatorCode || '').trim(),
+          liftOperatorName: String(op.liftOperatorName || op.LiftOperatorName || '').trim(),
+          baseCode: String(op.baseCode || op.BaseCode || '').trim(),
+          partnerCode: String(op.partnerCode || op.PartnerCode || '').trim(),
+          partnerName: String(op.partnerName || op.PartnerName || '').trim(),
+          isEnabled: op.isEnabled !== false,
+          sortOrder: op.sortOrder !== undefined ? op.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.liftOperators = this.cachedLiftOperators;
+        }
+      }
+      return payload;
+    }
+
+    throw new Error('通信クライアントが初期化されていないため、リフトマンの協力会社を変更できません。');
+  }
+
+  /**
+   * Updates the PartnerCode of an existing LooseItemCreator for the logged-in employee's Base and updates local cache immediately.
+   */
+  async updateLooseItemCreatorPartner(looseItemCreatorCodeOrRequest, partnerCode) {
+    let rawCode = looseItemCreatorCodeOrRequest;
+    let rawPartnerCode = partnerCode;
+    if (looseItemCreatorCodeOrRequest && typeof looseItemCreatorCodeOrRequest === 'object') {
+      rawCode = looseItemCreatorCodeOrRequest.looseItemCreatorCode !== undefined
+        ? looseItemCreatorCodeOrRequest.looseItemCreatorCode
+        : looseItemCreatorCodeOrRequest.code;
+      rawPartnerCode = looseItemCreatorCodeOrRequest.partnerCode !== undefined
+        ? looseItemCreatorCodeOrRequest.partnerCode
+        : looseItemCreatorCodeOrRequest.PartnerCode;
+    }
+    const trimmedCode = String(rawCode || '').trim();
+    if (!trimmedCode) {
+      throw new Error('対象のバラ作成担当者コードが指定されていません。');
+    }
+    const trimmedPartnerCode = String(rawPartnerCode || '').trim();
+    if (!trimmedPartnerCode) {
+      throw new Error('所属協力会社を選択してください。');
+    }
+
+    const shipmentClient = this.shipmentClient || ((typeof window !== 'undefined')
+      ? (window.shippingClient || window.shipmentClient)
+      : null);
+
+    if (shipmentClient && typeof shipmentClient.updateLooseItemCreatorPartner === 'function') {
+      const res = await shipmentClient.updateLooseItemCreatorPartner({
+        looseItemCreatorCode: trimmedCode,
+        partnerCode: trimmedPartnerCode
+      });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.looseItemCreators)) {
+        this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+          looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+          looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+          baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          partnerCode: String(c.partnerCode || c.PartnerCode || '').trim(),
+          partnerName: String(c.partnerName || c.PartnerName || '').trim(),
+          isEnabled: c.isEnabled !== false,
+          sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+        }
+      }
+      return payload;
+    }
+
+    const rpc = this._resolveRpcClient();
+    const token = this._resolveSessionToken();
+    if (rpc && token) {
+      const res = await rpc.call('looseItemCreator.updatePartner', {
+        sessionToken: token,
+        request: {
+          looseItemCreatorCode: trimmedCode,
+          partnerCode: trimmedPartnerCode
+        }
+      }, { isMutation: true });
+      const payload = (res && res.payload) ? res.payload : res;
+      if (payload && Array.isArray(payload.looseItemCreators)) {
+        this.cachedLooseItemCreators = payload.looseItemCreators.map(c => ({
+          looseItemCreatorCode: String(c.looseItemCreatorCode || c.LooseItemCreatorCode || '').trim(),
+          looseItemCreatorName: String(c.looseItemCreatorName || c.LooseItemCreatorName || '').trim(),
+          baseCode: String(c.baseCode || c.BaseCode || '').trim(),
+          partnerCode: String(c.partnerCode || c.PartnerCode || '').trim(),
+          partnerName: String(c.partnerName || c.PartnerName || '').trim(),
+          isEnabled: c.isEnabled !== false,
+          sortOrder: c.sortOrder !== undefined ? c.sortOrder : 999
+        }));
+        if (this.cachedFormOptions) {
+          this.cachedFormOptions.looseItemCreators = this.cachedLooseItemCreators;
+        }
+      }
+      return payload;
+    }
+
+    throw new Error('通信クライアントが初期化されていないため、バラ作成担当者の協力会社を変更できません。');
   }
 
   /**

@@ -310,6 +310,72 @@
     }, { isMutation: true });
   };
 
+  ShipmentClient.prototype.updateLiftOperatorPartner = function (liftOperatorCodeOrRequest, partnerCodeOrToken, tokenOverride) {
+    var reqObj;
+    var tokenArg = tokenOverride;
+    if (liftOperatorCodeOrRequest && typeof liftOperatorCodeOrRequest === 'object') {
+      reqObj = {
+        liftOperatorCode: liftOperatorCodeOrRequest.liftOperatorCode !== undefined
+          ? liftOperatorCodeOrRequest.liftOperatorCode
+          : liftOperatorCodeOrRequest.code,
+        partnerCode: liftOperatorCodeOrRequest.partnerCode !== undefined
+          ? liftOperatorCodeOrRequest.partnerCode
+          : liftOperatorCodeOrRequest.PartnerCode
+      };
+      if (tokenArg === undefined) {
+        tokenArg = partnerCodeOrToken;
+      }
+    } else {
+      reqObj = {
+        liftOperatorCode: liftOperatorCodeOrRequest,
+        partnerCode: partnerCodeOrToken
+      };
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenArg);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    return this.rpcClient.call('liftOperator.updatePartner', {
+      sessionToken: token,
+      request: reqObj
+    }, { isMutation: true });
+  };
+
+  ShipmentClient.prototype.updateLooseItemCreatorPartner = function (looseItemCreatorCodeOrRequest, partnerCodeOrToken, tokenOverride) {
+    var reqObj;
+    var tokenArg = tokenOverride;
+    if (looseItemCreatorCodeOrRequest && typeof looseItemCreatorCodeOrRequest === 'object') {
+      reqObj = {
+        looseItemCreatorCode: looseItemCreatorCodeOrRequest.looseItemCreatorCode !== undefined
+          ? looseItemCreatorCodeOrRequest.looseItemCreatorCode
+          : looseItemCreatorCodeOrRequest.code,
+        partnerCode: looseItemCreatorCodeOrRequest.partnerCode !== undefined
+          ? looseItemCreatorCodeOrRequest.partnerCode
+          : looseItemCreatorCodeOrRequest.PartnerCode
+      };
+      if (tokenArg === undefined) {
+        tokenArg = partnerCodeOrToken;
+      }
+    } else {
+      reqObj = {
+        looseItemCreatorCode: looseItemCreatorCodeOrRequest,
+        partnerCode: partnerCodeOrToken
+      };
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenArg);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    return this.rpcClient.call('looseItemCreator.updatePartner', {
+      sessionToken: token,
+      request: reqObj
+    }, { isMutation: true });
+  };
+
   return {
     ShipmentClient: ShipmentClient,
     createShipmentClient: function (options) {

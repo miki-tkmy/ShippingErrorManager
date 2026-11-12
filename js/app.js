@@ -281,7 +281,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         baseCode: ctx.baseId || ctx.baseCode || ''
       };
       formState.setEmployee(emp, false);
-      updateEmployeeUI();
+      updateEmployeeUI({ skipStaffFetch: true });
     }
 
     // 4. Populate Base-scoped dropdowns for LiftOperators & LooseItemCreators
@@ -472,7 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function updateEmployeeUI() {
+  function updateEmployeeUI(options = {}) {
     if (formState.currentEmployee) {
       const emp = formState.currentEmployee;
       const displayName = emp.empName || emp.employeeName || emp.empNo || '氏名未登録';
@@ -485,7 +485,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       txtBaseArea.textContent = baseAreaText;
       employeeCard.style.display = 'flex';
       updateLiftOperatorUI();
-      checkBaseOperatorsAndNotify();
+      if (!options || !options.skipStaffFetch) {
+        checkBaseOperatorsAndNotify();
+      }
     } else {
       employeeNameDisplay.textContent = '未選択';
       employeeBaseDisplay.textContent = '---';
@@ -533,7 +535,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         `;
         const selectAction = async () => {
           formState.setEmployee(emp, true);
-          updateEmployeeUI();
+          updateEmployeeUI({ skipStaffFetch: true });
           await populateBaseStaffDropdowns(true);
           closeEmployeeModal();
         };
@@ -655,6 +657,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       selNewLiftOperatorPartner.disabled = false;
     }
     if (hintLiftOperatorPartnerZero) {
+      hintLiftOperatorPartnerZero.textContent = '';
       hintLiftOperatorPartnerZero.style.display = 'none';
     }
     if (btnAddLiftOperator) {
@@ -680,6 +683,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       selNewLooseItemCreatorPartner.disabled = false;
     }
     if (hintLooseItemCreatorPartnerZero) {
+      hintLooseItemCreatorPartnerZero.textContent = '';
       hintLooseItemCreatorPartnerZero.style.display = 'none';
     }
     if (btnAddLooseItemCreator) {
@@ -701,7 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const rawBaseCode = (currentAccessContext && currentAccessContext.baseCode)
       || (formState && formState.currentEmployee && formState.currentEmployee.baseCode)
       || '';
-    const trimmed = String(rawBaseCode || '').trim();
+    const trimmed = String(rawBaseCode || '').normalize('NFKC').trim();
     if (!trimmed || trimmed === '所属未登録' || trimmed === 'Base未登録') {
       return '';
     }
@@ -731,7 +735,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectEl.appendChild(opt);
         selectEl.value = '';
         selectEl.disabled = true;
-        if (zeroHintEl) zeroHintEl.style.display = 'none';
+        if (zeroHintEl) {
+          zeroHintEl.textContent = '';
+          zeroHintEl.style.display = 'none';
+        }
         if (addBtnEl) addBtnEl.disabled = true;
         if (nameInputEl) nameInputEl.disabled = true;
         return;
@@ -744,7 +751,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectEl.appendChild(opt);
         selectEl.value = '';
         selectEl.disabled = true;
-        if (zeroHintEl) zeroHintEl.style.display = 'none';
+        if (zeroHintEl) {
+          zeroHintEl.textContent = '';
+          zeroHintEl.style.display = 'none';
+        }
         if (addBtnEl) addBtnEl.disabled = true;
         return;
       }
@@ -764,7 +774,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      if (zeroHintEl) zeroHintEl.style.display = 'none';
+      if (zeroHintEl) {
+        zeroHintEl.textContent = '';
+        zeroHintEl.style.display = 'none';
+      }
       selectEl.disabled = false;
       if (addBtnEl) addBtnEl.disabled = false;
       if (nameInputEl) nameInputEl.disabled = false;
@@ -830,7 +843,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       let basePartners = [];
 
       if (masterClient && typeof masterClient.listBaseStaff === 'function') {
-        const res = await masterClient.listBaseStaff({ baseCode: currentBaseCode, forceRefresh: Boolean(forceRefresh) });
+        let res;
+        try {
+          res = await masterClient.listBaseStaff({ baseCode: currentBaseCode, forceRefresh: Boolean(forceRefresh) });
+        } catch (firstErr) {
+          const errCode = (firstErr && firstErr.code) || '';
+          const errMsg = (firstErr && firstErr.message) || '';
+          const isSessionError = errCode === 'AUTHORIZATION_REQUIRED' ||
+            errCode === 'INVALID_SESSION' ||
+            errCode === 'UNAUTHENTICATED' ||
+            /Session is invalid or expired|UNAUTHENTICATED/i.test(errMsg);
+          const recoveryEmpNo = (currentAccessContext && currentAccessContext.isSimpleSession && currentAccessContext.empNo)
+            || (authClient && typeof authClient.getSavedEmployeeCode === 'function' ? authClient.getSavedEmployeeCode() : '');
+          if (isSessionError && recoveryEmpNo && authClient && typeof authClient.simpleLogin === 'function') {
+            await authClient.simpleLogin(recoveryEmpNo);
+            res = await masterClient.listBaseStaff({ baseCode: currentBaseCode, forceRefresh: true });
+          } else {
+            throw firstErr;
+          }
+        }
         liftOps = Array.isArray(res && res.liftOperators) ? res.liftOperators : [];
         looseCreators = Array.isArray(res && res.looseItemCreators) ? res.looseItemCreators : [];
         basePartners = Array.isArray(res && res.partners)
@@ -848,13 +879,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         basePartners = Array.isArray(masterClient.cachedBasePartners)
           ? masterClient.cachedBasePartners
           : (Array.isArray(masterClient.cachedPartners)
-            ? masterClient.cachedPartners.filter(p => String(p.baseCode || '') === currentBaseCode)
+            ? masterClient.cachedPartners.filter(p => String(p.baseCode || '').normalize('NFKC').trim() === currentBaseCode)
             : []);
       }
 
       // Defense-in-depth: strictly filter to caller's BaseCode and active records only
       currentBasePartners = (basePartners || []).filter(p =>
-        p && Boolean(p.partnerCode) && String(p.baseCode || '') === currentBaseCode
+        p && Boolean(p.partnerCode) && String(p.baseCode || '').normalize('NFKC').trim() === currentBaseCode
       );
       const partnerNameByCode = {};
       currentBasePartners.forEach(p => {
@@ -862,7 +893,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       currentBaseLiftOperators = (liftOps || []).filter(op =>
-        op && op.isActive !== false && String(op.baseCode || '') === currentBaseCode
+        op && op.isActive !== false && String(op.baseCode || '').normalize('NFKC').trim() === currentBaseCode
       ).map(op => {
         const pCode = String(op.partnerCode || '').trim();
         const pName = String(op.partnerName || partnerNameByCode[pCode] || '').trim();
@@ -870,7 +901,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       currentBaseLooseItemCreators = (looseCreators || []).filter(c =>
-        c && c.isActive !== false && String(c.baseCode || '') === currentBaseCode
+        c && c.isActive !== false && String(c.baseCode || '').normalize('NFKC').trim() === currentBaseCode
       ).map(c => {
         const pCode = String(c.partnerCode || '').trim();
         const pName = String(c.partnerName || partnerNameByCode[pCode] || '').trim();
@@ -908,10 +939,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
 
-        // Preserve selection only if it belongs to current Base
+        // Preserve selection only if it belongs to current Base and refresh its latest partner info
         const selectedCode = formState.selectedLiftOperator ? formState.selectedLiftOperator.liftOperatorCode : '';
         const stillValidOp = currentBaseLiftOperators.find(op => op.liftOperatorCode === selectedCode);
         if (stillValidOp) {
+          if (typeof formState.selectLiftOperator === 'function') {
+            await formState.selectLiftOperator(stillValidOp);
+          } else {
+            formState.selectedLiftOperator = stillValidOp;
+          }
           selLiftOperator.value = stillValidOp.liftOperatorCode;
         } else {
           formState.clearLiftOperator();
@@ -949,10 +985,19 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
 
-        // Preserve selection only if it belongs to current Base
+        // Preserve selection only if it belongs to current Base and refresh its latest partner info
+        const selectedCreatorCode = (formState.selectedLooseItemCreator && formState.selectedLooseItemCreator.looseItemCreatorCode) || '';
         const selectedCreatorName = formState.looseItemCreatorName || '';
-        const stillValidCreator = currentBaseLooseItemCreators.find(c => c.looseItemCreatorName === selectedCreatorName);
+        const stillValidCreator = currentBaseLooseItemCreators.find(c =>
+          (selectedCreatorCode && c.looseItemCreatorCode === selectedCreatorCode) ||
+          (selectedCreatorName && c.looseItemCreatorName === selectedCreatorName)
+        );
         if (stillValidCreator) {
+          if (typeof formState.selectLooseItemCreator === 'function') {
+            formState.selectLooseItemCreator(stillValidCreator);
+          } else {
+            formState.looseItemCreatorName = stillValidCreator.looseItemCreatorName;
+          }
           txtLooseItemCreator.value = stillValidCreator.looseItemCreatorName;
         } else {
           if (typeof formState.clearLooseItemCreator === 'function') {
@@ -1939,6 +1984,212 @@ document.addEventListener('DOMContentLoaded', async () => {
     const safeLiftOps = Array.isArray(liftOps) ? liftOps : [];
     const safeLooseCreators = Array.isArray(looseCreators) ? looseCreators : [];
 
+    const pencilSvg = (typeof getLucideIcon === 'function')
+      ? getLucideIcon('pencil', { size: 16, ariaHidden: true })
+      : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>';
+    const checkSvg = (typeof getLucideIcon === 'function')
+      ? getLucideIcon('check', { size: 16, ariaHidden: true })
+      : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+    const closeSvg = (typeof getLucideIcon === 'function')
+      ? getLucideIcon('x', { size: 16, ariaHidden: true })
+      : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+    const buildStaffListItem = (item, idx, roleConfig) => {
+      const staffCode = String(item[roleConfig.codeKey] || '').trim();
+      const staffName = String(item[roleConfig.nameKey] || '').trim();
+      const currentPartnerCode = String(item.partnerCode || '').trim();
+      const resolvedPartnerName = String(item.partnerName || '').trim();
+
+      const li = document.createElement('li');
+      li.className = 'settings-staff-item';
+      li.setAttribute('data-staff-code', staffCode);
+
+      const mainRow = document.createElement('div');
+      mainRow.className = 'settings-staff-row-main';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'settings-staff-name';
+      nameSpan.textContent = staffName;
+
+      const rightWrap = document.createElement('div');
+      rightWrap.className = 'settings-staff-actions';
+
+      const partnerSpan = document.createElement('span');
+      partnerSpan.className = resolvedPartnerName
+        ? 'settings-staff-partner-badge'
+        : 'settings-staff-partner-badge is-unset';
+      partnerSpan.textContent = resolvedPartnerName || '協力会社未設定';
+
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'settings-staff-meta';
+      metaSpan.textContent = `No.${idx + 1}`;
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn-icon-edit-partner';
+      editBtn.setAttribute('aria-label', '所属協力会社を変更');
+      editBtn.setAttribute('title', '所属協力会社を変更');
+      editBtn.setAttribute('data-tooltip', '所属協力会社を変更');
+      editBtn.setAttribute('aria-expanded', 'false');
+      editBtn.innerHTML = pencilSvg;
+
+      rightWrap.appendChild(partnerSpan);
+      rightWrap.appendChild(metaSpan);
+      rightWrap.appendChild(editBtn);
+      mainRow.appendChild(nameSpan);
+      mainRow.appendChild(rightWrap);
+
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'settings-inline-partner-editor';
+      editorWrap.style.display = 'none';
+
+      const partnerSelect = document.createElement('select');
+      partnerSelect.className = 'form-control settings-inline-partner-select';
+      partnerSelect.setAttribute('aria-label', `${staffName}の所属協力会社を選択`);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'btn-icon-save-partner';
+      saveBtn.setAttribute('aria-label', '変更を保存');
+      saveBtn.setAttribute('title', '変更を保存');
+      saveBtn.setAttribute('data-tooltip', '変更を保存');
+      saveBtn.innerHTML = checkSvg;
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn-icon-cancel-partner';
+      cancelBtn.setAttribute('aria-label', '変更をキャンセル');
+      cancelBtn.setAttribute('title', '変更をキャンセル');
+      cancelBtn.setAttribute('data-tooltip', '変更をキャンセル');
+      cancelBtn.innerHTML = closeSvg;
+
+      const editorActions = document.createElement('div');
+      editorActions.className = 'settings-inline-partner-actions';
+      editorActions.appendChild(saveBtn);
+      editorActions.appendChild(cancelBtn);
+
+      editorWrap.appendChild(partnerSelect);
+      editorWrap.appendChild(editorActions);
+
+      const populateInlineSelectOptions = () => {
+        partnerSelect.innerHTML = '';
+        const safePartners = Array.isArray(currentBasePartners) ? currentBasePartners : [];
+        if (safePartners.length === 0) {
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = 'この拠点に登録された協力会社がありません';
+          partnerSelect.appendChild(emptyOpt);
+          partnerSelect.value = '';
+          partnerSelect.disabled = true;
+          saveBtn.disabled = true;
+          return;
+        }
+
+        partnerSelect.disabled = false;
+        saveBtn.disabled = false;
+
+        const placeholderOpt = document.createElement('option');
+        placeholderOpt.value = '';
+        placeholderOpt.textContent = '-- 所属協力会社を選択してください --';
+        partnerSelect.appendChild(placeholderOpt);
+
+        safePartners.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.partnerCode;
+          opt.textContent = p.partnerName || p.partnerCode;
+          partnerSelect.appendChild(opt);
+        });
+
+        const hasCurrent = Boolean(
+          currentPartnerCode && safePartners.some(p => p.partnerCode === currentPartnerCode)
+        );
+        partnerSelect.value = hasCurrent ? currentPartnerCode : '';
+      };
+
+      const openEditor = () => {
+        showSettingsFeedback(roleConfig.feedbackEl, 'info', '');
+        populateInlineSelectOptions();
+        editorWrap.style.display = 'flex';
+        li.classList.add('is-editing');
+        editBtn.setAttribute('aria-expanded', 'true');
+        if (typeof partnerSelect.focus === 'function') {
+          partnerSelect.focus();
+        }
+      };
+
+      const closeEditor = (restoreFocus = false) => {
+        editorWrap.style.display = 'none';
+        li.classList.remove('is-editing');
+        editBtn.setAttribute('aria-expanded', 'false');
+        if (restoreFocus && typeof editBtn.focus === 'function') {
+          editBtn.focus();
+        }
+      };
+
+      const savePartnerChange = async () => {
+        showSettingsFeedback(roleConfig.feedbackEl, 'info', '');
+        const newPartnerCode = String(partnerSelect.value || '').trim();
+        if (!newPartnerCode) {
+          showSettingsFeedback(roleConfig.feedbackEl, 'error', '所属協力会社を選択してください。');
+          return;
+        }
+
+        partnerSelect.disabled = true;
+        saveBtn.disabled = true;
+        cancelBtn.disabled = true;
+        editBtn.disabled = true;
+        try {
+          const updatedRes = await roleConfig.updatePartner(staffCode, newPartnerCode);
+          await populateBaseStaffDropdowns(true);
+          renderSettingsStaffLists(currentBaseLiftOperators, currentBaseLooseItemCreators);
+          const updatedEntity = updatedRes && (updatedRes[roleConfig.entityKey] || updatedRes.updated);
+          const newPartnerName = (updatedEntity && updatedEntity.partnerName)
+            || (currentBasePartners.find(p => p.partnerCode === newPartnerCode)?.partnerName)
+            || newPartnerCode;
+          showSettingsFeedback(
+            roleConfig.feedbackEl,
+            'success',
+            `${roleConfig.roleLabel}「${staffName}」の所属協力会社を「${newPartnerName}」に変更しました。`
+          );
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : `${roleConfig.roleLabel}の所属協力会社の変更に失敗しました。`;
+          showSettingsFeedback(roleConfig.feedbackEl, 'error', msg);
+          partnerSelect.disabled = false;
+          saveBtn.disabled = false;
+          cancelBtn.disabled = false;
+          editBtn.disabled = false;
+        }
+      };
+
+      editBtn.addEventListener('click', () => {
+        if (editorWrap.style.display !== 'none') {
+          closeEditor(true);
+        } else {
+          openEditor();
+        }
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        closeEditor(true);
+      });
+
+      saveBtn.addEventListener('click', savePartnerChange);
+
+      partnerSelect.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeEditor(true);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          savePartnerChange();
+        }
+      });
+
+      li.appendChild(mainRow);
+      li.appendChild(editorWrap);
+      return li;
+    };
+
     if (lblSettingsLiftOperatorCount) {
       lblSettingsLiftOperatorCount.textContent = `${safeLiftOps.length}名`;
     }
@@ -1948,34 +2199,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (emptySettingsLiftOperators) emptySettingsLiftOperators.style.display = 'block';
       } else {
         if (emptySettingsLiftOperators) emptySettingsLiftOperators.style.display = 'none';
+        const liftRoleConfig = {
+          codeKey: 'liftOperatorCode',
+          nameKey: 'liftOperatorName',
+          entityKey: 'liftOperator',
+          roleLabel: 'リフトマン',
+          feedbackEl: msgSettingsLiftOperator,
+          updatePartner: (code, partnerCode) => masterClient.updateLiftOperatorPartner(code, partnerCode)
+        };
         safeLiftOps.forEach((op, idx) => {
-          const li = document.createElement('li');
-          li.className = 'settings-staff-item';
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'settings-staff-name';
-          nameSpan.textContent = op.liftOperatorName || '';
-
-          const rightWrap = document.createElement('div');
-          rightWrap.style.display = 'inline-flex';
-          rightWrap.style.alignItems = 'center';
-          rightWrap.style.gap = '8px';
-
-          const partnerSpan = document.createElement('span');
-          const resolvedPartnerName = String(op.partnerName || '').trim();
-          partnerSpan.className = resolvedPartnerName
-            ? 'settings-staff-partner-badge'
-            : 'settings-staff-partner-badge is-unset';
-          partnerSpan.textContent = resolvedPartnerName || '協力会社未設定';
-
-          const metaSpan = document.createElement('span');
-          metaSpan.className = 'settings-staff-meta';
-          metaSpan.textContent = `No.${idx + 1}`;
-
-          rightWrap.appendChild(partnerSpan);
-          rightWrap.appendChild(metaSpan);
-          li.appendChild(nameSpan);
-          li.appendChild(rightWrap);
-          listSettingsLiftOperators.appendChild(li);
+          listSettingsLiftOperators.appendChild(buildStaffListItem(op, idx, liftRoleConfig));
         });
       }
     }
@@ -1989,34 +2222,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (emptySettingsLooseItemCreators) emptySettingsLooseItemCreators.style.display = 'block';
       } else {
         if (emptySettingsLooseItemCreators) emptySettingsLooseItemCreators.style.display = 'none';
+        const creatorRoleConfig = {
+          codeKey: 'looseItemCreatorCode',
+          nameKey: 'looseItemCreatorName',
+          entityKey: 'looseItemCreator',
+          roleLabel: 'バラ作成担当者',
+          feedbackEl: msgSettingsLooseItemCreator,
+          updatePartner: (code, partnerCode) => masterClient.updateLooseItemCreatorPartner(code, partnerCode)
+        };
         safeLooseCreators.forEach((c, idx) => {
-          const li = document.createElement('li');
-          li.className = 'settings-staff-item';
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'settings-staff-name';
-          nameSpan.textContent = c.looseItemCreatorName || '';
-
-          const rightWrap = document.createElement('div');
-          rightWrap.style.display = 'inline-flex';
-          rightWrap.style.alignItems = 'center';
-          rightWrap.style.gap = '8px';
-
-          const partnerSpan = document.createElement('span');
-          const resolvedPartnerName = String(c.partnerName || '').trim();
-          partnerSpan.className = resolvedPartnerName
-            ? 'settings-staff-partner-badge'
-            : 'settings-staff-partner-badge is-unset';
-          partnerSpan.textContent = resolvedPartnerName || '協力会社未設定';
-
-          const metaSpan = document.createElement('span');
-          metaSpan.className = 'settings-staff-meta';
-          metaSpan.textContent = `No.${idx + 1}`;
-
-          rightWrap.appendChild(partnerSpan);
-          rightWrap.appendChild(metaSpan);
-          li.appendChild(nameSpan);
-          li.appendChild(rightWrap);
-          listSettingsLooseItemCreators.appendChild(li);
+          listSettingsLooseItemCreators.appendChild(buildStaffListItem(c, idx, creatorRoleConfig));
         });
       }
     }
