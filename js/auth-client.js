@@ -59,6 +59,7 @@
     }
 
     var _kdfCache = new Map(); // empNo -> { params, timestamp }
+    var _lastAuthenticatedEmpNo = null;
 
     /**
      * Retrieves KDF parameters for pre-authentication PBKDF2 calculation.
@@ -93,10 +94,10 @@
      */
     function login(empNo, rawPassword) {
       if (!empNo || typeof empNo !== 'string') {
-        return Promise.reject(new Error('??????????????'));
+        return Promise.reject(new Error('社員番号を入力してください。'));
       }
       if (!rawPassword || typeof rawPassword !== 'string') {
-        return Promise.reject(new Error('???????????????'));
+        return Promise.reject(new Error('パスワードを入力してください。'));
       }
 
       var cleanEmpNo = empNo.trim();
@@ -125,8 +126,9 @@
             if (!saved) {
               // Best-effort cleanup of issued server session
               rpcClient.call('auth.logout', { sessionToken: data.token }).catch(function () {});
-              throw new Error('??????????????????????');
+              throw new Error('セッショントークンの保存に失敗しました。');
             }
+            _lastAuthenticatedEmpNo = cleanEmpNo;
           }
           return data;
         })
@@ -186,7 +188,11 @@
       }
       return rpcClient.call('authz.getAccessContext', { sessionToken: activeToken })
         .then(function (res) {
-          return _unwrapPayload(res);
+          var data = _unwrapPayload(res);
+          if (data && data.empNo) {
+            _lastAuthenticatedEmpNo = String(data.empNo).trim();
+          }
+          return data;
         });
     }
 
@@ -203,7 +209,11 @@
       }
       return rpcClient.call('auth.validateSession', { sessionToken: activeToken })
         .then(function (res) {
-          return _unwrapPayload(res);
+          var data = _unwrapPayload(res);
+          if (data && data.valid && data.empNo) {
+            _lastAuthenticatedEmpNo = String(data.empNo).trim();
+          }
+          return data;
         });
     }
 
@@ -214,33 +224,80 @@
      * @param {string} newRawPassword New password
      * @return {Promise<Object>} { success: true, mustReLogin: true }
      */
-    function changePassword(newRawPassword) {
+    function changePassword(newRawPassword, options) {
       var activeToken = sess.getToken();
       if (!activeToken) {
-        return Promise.reject(new Error('???????????????????????????????'));
+        return Promise.reject(new Error('認証セッションが見つかりません。再度ログインしてください。'));
       }
 
-      // Pre-validate password length on client
+      // 1. Synchronous length check before any network or KDF work
       try {
         kdf.validatePasswordLength(newRawPassword);
-      } catch (err) {
-        return Promise.reject(err);
+      } catch (lenErr) {
+        return Promise.reject(lenErr);
       }
 
-      var newSalt = kdf.generateRandomSalt();
+      var initialEmpNo = (options && typeof options.empNo === 'string' && options.empNo.trim())
+        ? options.empNo.trim()
+        : (_lastAuthenticatedEmpNo || '');
 
-      return kdf.deriveClientSecret(newRawPassword, newSalt, 600000)
-        .then(function (newClientSecret) {
-          return rpcClient.call('auth.changePassword', {
+      var resolveEmpNoPromise = initialEmpNo
+        ? Promise.resolve(initialEmpNo)
+        : validateSession(activeToken).then(function (sInfo) {
+            return (sInfo && sInfo.valid && sInfo.empNo) ? String(sInfo.empNo).trim() : '';
+          });
+
+      return resolveEmpNoPromise
+        .then(function (targetEmpNo) {
+          // 2. Enforce employee number equality/containment check on client BEFORE KDF or changePassword RPC
+          if (targetEmpNo && typeof kdf.validatePasswordForEmployee === 'function') {
+            kdf.validatePasswordForEmployee(newRawPassword, targetEmpNo);
+          }
+
+          var newSalt = kdf.generateRandomSalt();
+          var cachedCurrent = targetEmpNo ? _kdfCache.get(targetEmpNo) : null;
+          var currentParams = (cachedCurrent && cachedCurrent.params && cachedCurrent.params.salt)
+            ? cachedCurrent.params
+            : null;
+
+          return kdf.deriveClientSecret(newRawPassword, newSalt, 600000)
+            .then(function (newClientSecret) {
+              if (currentParams) {
+                return kdf.deriveClientSecret(
+                  newRawPassword,
+                  currentParams.salt,
+                  currentParams.iterations || 600000
+                ).then(function (currentSaltClientSecret) {
+                  return {
+                    newSalt: newSalt,
+                    newClientSecret: newClientSecret,
+                    currentSaltClientSecret: currentSaltClientSecret
+                  };
+                });
+              }
+              return {
+                newSalt: newSalt,
+                newClientSecret: newClientSecret,
+                currentSaltClientSecret: null
+              };
+            });
+        })
+        .then(function (derived) {
+          var reqPayload = {
             sessionToken: activeToken,
             newRawPassword: newRawPassword,
-            newSalt: newSalt,
-            newClientSecret: newClientSecret
-          });
+            newSalt: derived.newSalt,
+            newClientSecret: derived.newClientSecret
+          };
+          if (derived.currentSaltClientSecret) {
+            reqPayload.currentSaltClientSecret = derived.currentSaltClientSecret;
+          }
+          return rpcClient.call('auth.changePassword', reqPayload);
         })
         .then(function (res) {
           // Clear local session storage and KDF salt cache as password change rotates salt and revokes sessions
           _kdfCache.clear();
+          _lastAuthenticatedEmpNo = null;
           sess.clearToken();
           return _unwrapPayload(res);
         });

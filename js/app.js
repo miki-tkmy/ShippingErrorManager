@@ -91,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     isPasswordChangeRequiredMode = Boolean(requirePasswordChange);
     if (txtLoginEmpNo) {
       txtLoginEmpNo.readOnly = isPasswordChangeRequiredMode;
+      txtLoginEmpNo.style.backgroundColor = isPasswordChangeRequiredMode ? '#F8FAFC' : '';
     }
     if (divLoginPasswordGroup) {
       divLoginPasswordGroup.style.display = (isAdminLoginMode && !isPasswordChangeRequiredMode) ? 'block' : 'none';
@@ -124,7 +125,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (loginPromptText) {
       loginPromptText.innerHTML = isPasswordChangeRequiredMode
-        ? '初回ログインのため、15文字以上の新しいパスワードを設定してください。'
+        ? '初回ログインのため、4文字以上の新しいパスワードを設定してください。'
         : (isAdminLoginMode
           ? '管理者または審査担当者の社員番号とパスワードを入力してください。'
           : '社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>');
@@ -137,7 +138,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (btnLoginSubmit) {
       btnLoginSubmit.textContent = isPasswordChangeRequiredMode
-        ? 'パスワードを変更してログイン'
+        ? 'パスワード変更'
         : (isAdminLoginMode ? 'ログイン' : '利用開始');
     }
   }
@@ -153,11 +154,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function showLoginModal(message, asAdmin = false, requirePasswordChange = false) {
+  function showLoginModal(message, asAdmin = false, requirePasswordChange = false, alertVariant = 'warning') {
     if (!loginModal) return;
     setLoginMode(asAdmin, requirePasswordChange);
     if (loginMessage) {
       if (message) {
+        loginMessage.className = `alert-notice alert-${alertVariant || 'warning'}`;
         loginMessage.textContent = message;
         loginMessage.style.display = 'block';
       } else {
@@ -168,7 +170,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btnLoginSubmit) {
       btnLoginSubmit.disabled = false;
       btnLoginSubmit.textContent = isPasswordChangeRequiredMode
-        ? 'パスワードを変更してログイン'
+        ? 'パスワード変更'
         : (isAdminLoginMode ? 'ログイン' : '利用開始');
     }
     loginModal.classList.add('open');
@@ -176,6 +178,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.style.overflow = 'hidden';
     if (isPasswordChangeRequiredMode && txtLoginNewPassword) {
       txtLoginNewPassword.focus();
+    } else if (isAdminLoginMode && txtLoginEmpNo && txtLoginEmpNo.value && txtLoginPassword) {
+      txtLoginPassword.focus();
     } else if (txtLoginEmpNo) {
       const saved = authClient && typeof authClient.getSavedEmployeeCode === 'function'
         ? authClient.getSavedEmployeeCode()
@@ -204,6 +208,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     isPasswordChangeRequiredMode = false;
     if (txtLoginEmpNo) {
       txtLoginEmpNo.readOnly = false;
+      txtLoginEmpNo.style.backgroundColor = '';
     }
   }
 
@@ -349,6 +354,20 @@ document.addEventListener('DOMContentLoaded', async () => {
           throw new Error('Access context missing empNo');
         }
       } catch (err) {
+        if (err && (err.code === 'ERR_MUST_CHANGE_PASSWORD' || err.code === 'MUST_CHANGE_PASSWORD') && typeof authClient.validateSession === 'function') {
+          try {
+            const sessInfo = await authClient.validateSession();
+            if (sessInfo && sessInfo.valid && sessInfo.mustChangePassword === true && sessInfo.empNo) {
+              if (txtLoginEmpNo) {
+                txtLoginEmpNo.value = sessInfo.empNo;
+              }
+              showLoginModal('初回ログインのため、新しいパスワードを設定してください。', true, true, 'info');
+              return false;
+            }
+          } catch (vErr) {
+            console.warn('Temporary session validation failed:', vErr);
+          }
+        }
         console.warn('Session restore failed or expired:', err);
         if (typeof SessionClient !== 'undefined' && typeof SessionClient.clearToken === 'function') {
           SessionClient.clearToken();
@@ -2842,20 +2861,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       const newPasswordConfirm = txtLoginNewPasswordConfirm ? txtLoginNewPasswordConfirm.value : '';
 
       if (!empNo) {
-        showLoginModal('社員番号を入力してください。', isAdminLoginMode, false);
+        showLoginModal('社員番号を入力してください。', isAdminLoginMode, false, 'error');
         return;
       }
       if (isPasswordChangeRequiredMode) {
-        if (!newPassword || Array.from(newPassword.normalize('NFC')).length < 15) {
-          showLoginModal('新しいパスワードは15文字以上で入力してください。', true, true);
+        const normalizedNewPw = typeof newPassword.normalize === 'function' ? newPassword.normalize('NFC') : newPassword;
+        const newPwLen = Array.from(normalizedNewPw).length;
+        if (!newPassword || newPwLen < 4) {
+          showLoginModal('パスワードは4文字以上で入力してください。', true, true, 'error');
+          return;
+        }
+        if (newPwLen > 128) {
+          showLoginModal('パスワードは128文字以下である必要があります。', true, true, 'error');
+          return;
+        }
+        if (typeof PasswordKdf !== 'undefined' && typeof PasswordKdf.containsEmployeeNumber === 'function' && PasswordKdf.containsEmployeeNumber(normalizedNewPw, empNo)) {
+          showLoginModal('社員番号を含むパスワードは使用できません。', true, true, 'error');
           return;
         }
         if (newPassword !== newPasswordConfirm) {
-          showLoginModal('新しいパスワードと確認用パスワードが一致しません。', true, true);
+          showLoginModal('新しいパスワードと確認用パスワードが一致しません。', true, true, 'error');
           return;
         }
       } else if (isAdminLoginMode && !password) {
-        showLoginModal('パスワードを入力してください。', true, false);
+        showLoginModal('パスワードを入力してください。', true, false, 'error');
         return;
       }
 
@@ -2869,13 +2898,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let ctx = null;
         if (isPasswordChangeRequiredMode) {
-          await authClient.changePassword(newPassword);
-          await authClient.login(empNo, newPassword);
-          ctx = await authClient.getAccessContext();
+          await authClient.changePassword(newPassword, { empNo });
+          currentAccessContext = null;
+          window.__CURRENT_ACCESS_CONTEXT__ = null;
+          if (txtLoginEmpNo) {
+            txtLoginEmpNo.value = empNo;
+          }
+          showLoginModal('パスワードを変更しました。新しいパスワードで再度ログインしてください。', true, false, 'success');
+          return;
         } else if (isAdminLoginMode) {
           const loginRes = await authClient.login(empNo, password);
           if (loginRes && loginRes.mustChangePassword === true) {
-            showLoginModal('初回ログインのため、15文字以上の新しいパスワードを設定してください。', true, true);
+            showLoginModal('初回ログインのため、新しいパスワードを設定してください。', true, true, 'info');
             return;
           }
           ctx = await authClient.getAccessContext();
@@ -2897,7 +2931,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       } catch (loginErr) {
         console.error('Login failed:', loginErr);
         if (loginErr && (loginErr.code === 'MUST_CHANGE_PASSWORD' || loginErr.code === 'ERR_MUST_CHANGE_PASSWORD')) {
-          showLoginModal('初回ログインのため、15文字以上の新しいパスワードを設定してください。', true, true);
+          showLoginModal('初回ログインのため、新しいパスワードを設定してください。', true, true, 'info');
           return;
         }
         let msg = (loginErr && loginErr.message) ? loginErr.message : '社員番号が正しくありません。';
@@ -2912,12 +2946,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (loginErr && loginErr.code === 'EMPLOYEE_DISABLED') {
           msg = 'この社員アカウントは無効化されています。';
         }
-        showLoginModal(msg, isAdminLoginMode, isPasswordChangeRequiredMode);
+        showLoginModal(msg, isAdminLoginMode, isPasswordChangeRequiredMode, 'error');
       } finally {
         if (btnLoginSubmit) {
           btnLoginSubmit.disabled = false;
           btnLoginSubmit.textContent = isPasswordChangeRequiredMode
-            ? 'パスワードを変更してログイン'
+            ? 'パスワード変更'
             : (isAdminLoginMode ? 'ログイン' : '利用開始');
         }
       }

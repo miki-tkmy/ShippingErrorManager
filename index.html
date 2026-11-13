@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>出荷チェック・積み間違い管理 | ShippingErrorManager</title>
   <link rel="stylesheet" href="assets/css/tokens.css?v=20261109a">
-  <link rel="stylesheet" href="assets/css/components.css?v=20261109a">
+  <link rel="stylesheet" href="assets/css/components.css?v=20261113a">
 </head>
 <body>
   <!-- Top Indeterminate Progress Bar (FRONTEND-001) -->
@@ -879,13 +879,13 @@
           </div>
           <div id="divNewPasswordGroup" class="form-group" style="margin-bottom: 16px; display: none;">
             <label class="form-label" for="txtLoginNewPassword">
-              <span>新しいパスワード（15文字以上） <span class="required-asterisk">*</span></span>
+              <span>新しいパスワード <span class="required-asterisk">*</span></span>
             </label>
-            <input type="password" id="txtLoginNewPassword" class="form-control" placeholder="15文字以上の新しいパスワード" autocomplete="new-password" style="min-height: 48px; font-size: 1rem; margin-bottom: 12px;">
+            <input type="password" id="txtLoginNewPassword" class="form-control" minlength="4" maxlength="128" placeholder="4文字以上の新しいパスワード" autocomplete="new-password" style="min-height: 48px; font-size: 1rem; margin-bottom: 12px;">
             <label class="form-label" for="txtLoginNewPasswordConfirm">
               <span>新しいパスワード（確認） <span class="required-asterisk">*</span></span>
             </label>
-            <input type="password" id="txtLoginNewPasswordConfirm" class="form-control" placeholder="もう一度新しいパスワードを入力" autocomplete="new-password" style="min-height: 48px; font-size: 1rem;">
+            <input type="password" id="txtLoginNewPasswordConfirm" class="form-control" minlength="4" maxlength="128" placeholder="もう一度新しいパスワードを入力" autocomplete="new-password" style="min-height: 48px; font-size: 1rem;">
           </div>
           <div style="text-align: right; margin-top: 4px; margin-bottom: 8px;">
             <button type="button" id="btnToggleAdminLogin" class="btn-link" style="background: none; border: none; color: var(--color-primary); cursor: pointer; font-size: 0.825rem; text-decoration: underline; padding: 4px 0;">
@@ -916,9 +916,9 @@
   <script src="js/loading-component.js?v=20261109a"></script>
   <script src="js/modal-manager.js?v=20261109a"></script>
   <script src="js/material-combobox.js?v=20261109a"></script>
-  <script src="js/password-kdf.js?v=20261109a"></script>
+  <script src="js/password-kdf.js?v=20261113a"></script>
   <script src="js/session-client.js?v=20261109a"></script>
-  <script src="js/auth-client.js?v=20261109a"></script>
+  <script src="js/auth-client.js?v=20261113a"></script>
   <script src="js/authorization-client.js?v=20261109a"></script>
   <script src="js/master-client.js?v=20261109a"></script>
   <script src="js/shipment-cache.js?v=20261109a"></script>
@@ -926,6 +926,6 @@
   <script src="js/shipment-check-form.js?v=20261109a"></script>
   <script src="js/review.js?v=20261109a"></script>
   <script src="js/analytics.js?v=20261109a"></script>
-  <script src="js/app.js?v=20261109a"></script>
+  <script src="js/app.js?v=20261113a"></script>
 </body>
 </html>

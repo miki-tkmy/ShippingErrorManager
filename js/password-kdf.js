@@ -74,7 +74,7 @@
   }
 
   /**
-   * Validates password code point length (15 to 128 characters).
+   * Validates password code point length (4 to 128 characters).
    *
    * @param {string} password Raw or normalized password
    * @return {string} Normalized password if valid
@@ -83,8 +83,8 @@
     var normalized = normalizePassword(password);
     var codePoints = Array.from ? Array.from(normalized) : normalized.split('');
     var len = codePoints.length;
-    if (len < 15) {
-      var errMin = new Error('パスワードは15文字以上である必要があります。');
+    if (len < 4) {
+      var errMin = new Error('パスワードは4文字以上で入力してください。');
       errMin.code = 'PASSWORD_TOO_SHORT';
       throw errMin;
     }
@@ -92,6 +92,52 @@
       var errMax = new Error('パスワードは128文字以下である必要があります。');
       errMax.code = 'PASSWORD_TOO_LONG';
       throw errMax;
+    }
+    return normalized;
+  }
+
+  /**
+   * Checks whether the password matches or contains the employee's own EmpNo.
+   *
+   * @param {string} password Raw or normalized password
+   * @param {string} empNo Employee number
+   * @return {boolean} True if password equals or contains empNo
+   */
+  function containsEmployeeNumber(password, empNo) {
+    if (typeof password !== 'string' || typeof empNo !== 'string') {
+      return false;
+    }
+    var cleanEmp = empNo.trim().toLowerCase();
+    if (!cleanEmp) {
+      return false;
+    }
+    var normalized = normalizePassword(password);
+    if (normalized.toLowerCase().indexOf(cleanEmp) !== -1) {
+      return true;
+    }
+    if (typeof normalized.normalize === 'function') {
+      var nfkcPw = normalized.normalize('NFKC').toLowerCase();
+      var nfkcEmp = cleanEmp.normalize('NFKC').toLowerCase();
+      if (nfkcEmp && nfkcPw.indexOf(nfkcEmp) !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Validates password length (4-128 chars) and employee number prohibition.
+   *
+   * @param {string} password Raw password
+   * @param {string} empNo Employee number
+   * @return {string} Normalized password if valid
+   */
+  function validatePasswordForEmployee(password, empNo) {
+    var normalized = validatePasswordLength(password);
+    if (containsEmployeeNumber(normalized, empNo)) {
+      var errEmp = new Error('社員番号を含むパスワードは使用できません。');
+      errEmp.code = 'PASSWORD_CONTAINS_EMP_NO';
+      throw errEmp;
     }
     return normalized;
   }
@@ -208,6 +254,8 @@
   return {
     normalizePassword: normalizePassword,
     validatePasswordLength: validatePasswordLength,
+    containsEmployeeNumber: containsEmployeeNumber,
+    validatePasswordForEmployee: validatePasswordForEmployee,
     generateRandomSalt: generateRandomSalt,
     generateRandomSessionSecret: generateRandomSessionSecret,
     deriveClientSecret: deriveClientSecret,
