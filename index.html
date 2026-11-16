@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>出荷チェック・積み間違い管理 | ShippingErrorManager</title>
   <link rel="stylesheet" href="assets/css/tokens.css?v=20261109a">
-  <link rel="stylesheet" href="assets/css/components.css?v=20261113a">
+  <link rel="stylesheet" href="assets/css/components.css?v=20261113b">
 </head>
 <body>
   <!-- Top Indeterminate Progress Bar (FRONTEND-001) -->
@@ -32,7 +32,7 @@
         <button type="button" class="btn-nav" id="btnNavList">実績一覧</button>
         <button type="button" class="btn-nav" id="btnNavReview" style="display: none;" hidden>レビュー管理</button>
         <button type="button" class="btn-nav" id="btnNavAnalytics">全国集計分析</button>
-        <button type="button" class="btn-nav" id="btnNavSettings" style="display: inline-flex; align-items: center; gap: 6px;">
+        <button type="button" class="btn-nav" id="btnNavSettings" style="display: inline-flex; align-items: center; gap: 4px;">
           <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>設定</span>
         </button>
@@ -862,14 +862,14 @@
       <form id="loginForm" onsubmit="return false;" novalidate>
         <div class="modal-body">
           <div id="loginMessage" class="alert-notice alert-warning" style="display: none; padding: 10px 14px; margin-bottom: 16px; font-size: 0.875rem; border-radius: 6px;" role="alert"></div>
-          <p id="loginPromptText" style="margin-top: 0; margin-bottom: 14px; font-size: 0.9rem; color: var(--color-text-muted);">
-            社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>
+          <p id="loginPromptText" style="margin-top: 0; margin-bottom: 12px; font-size: 0.9rem; line-height: 1.5; color: var(--color-text-muted);">
+            社員番号を入力して利用を開始してください。
           </p>
-          <div class="form-group" style="margin-bottom: 16px;">
+          <div class="form-group" style="margin-bottom: 14px;">
             <label class="form-label" for="txtLoginEmpNo">
               <span>社員番号 <span class="required-asterisk">*</span></span>
             </label>
-            <input type="text" id="txtLoginEmpNo" class="form-control" placeholder="例: EMP00123" required autocomplete="username" style="min-height: 48px; font-size: 1rem;">
+            <input type="text" id="txtLoginEmpNo" class="form-control" placeholder="例: 1234" required autocomplete="username" style="min-height: 48px; font-size: 1rem;">
           </div>
           <div id="divLoginPasswordGroup" class="form-group" style="margin-bottom: 16px; display: none;">
             <label class="form-label" for="txtLoginPassword">
@@ -887,7 +887,7 @@
             </label>
             <input type="password" id="txtLoginNewPasswordConfirm" class="form-control" minlength="4" maxlength="128" placeholder="もう一度新しいパスワードを入力" autocomplete="new-password" style="min-height: 48px; font-size: 1rem;">
           </div>
-          <div style="text-align: right; margin-top: 4px; margin-bottom: 8px;">
+          <div style="text-align: right; margin-top: 2px; margin-bottom: 4px;">
             <button type="button" id="btnToggleAdminLogin" class="btn-link" style="background: none; border: none; color: var(--color-primary); cursor: pointer; font-size: 0.825rem; text-decoration: underline; padding: 4px 0;">
               管理者・審査担当者はこちら
             </button>
@@ -926,6 +926,6 @@
   <script src="js/shipment-check-form.js?v=20261109a"></script>
   <script src="js/review.js?v=20261109a"></script>
   <script src="js/analytics.js?v=20261109a"></script>
-  <script src="js/app.js?v=20261113a"></script>
+  <script src="js/app.js?v=20261113b"></script>
 </body>
 </html>

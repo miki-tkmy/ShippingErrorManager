@@ -124,11 +124,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         : (isAdminLoginMode ? '管理者・審査者ログイン' : '利用開始');
     }
     if (loginPromptText) {
-      loginPromptText.innerHTML = isPasswordChangeRequiredMode
+      loginPromptText.textContent = isPasswordChangeRequiredMode
         ? '初回ログインのため、4文字以上の新しいパスワードを設定してください。'
         : (isAdminLoginMode
           ? '管理者または審査担当者の社員番号とパスワードを入力してください。'
-          : '社員番号を入力して利用を開始してください。<br><small style="color: var(--color-text-muted);">（現場一般作業はパスワード不要です）</small>');
+          : '社員番号を入力して利用を開始してください。');
     }
     if (btnToggleAdminLogin) {
       btnToggleAdminLogin.style.display = isPasswordChangeRequiredMode ? 'none' : '';
@@ -269,6 +269,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         btnNavReview.style.display = 'none';
         btnNavReview.setAttribute('hidden', '');
+      }
+      if (typeof updateNavScrollHint === 'function') {
+        updateNavScrollHint();
+        setTimeout(updateNavScrollHint, 0);
       }
     }
 
@@ -1961,15 +1965,47 @@ document.addEventListener('DOMContentLoaded', async () => {
   const navScrollHint = document.getElementById('navScrollHint');
 
   function updateNavScrollHint() {
-    if (!appNav || !navScrollHint) return;
-    const isOverflowing = appNav.scrollWidth > appNav.clientWidth + 4;
-    const isEnd = (appNav.scrollLeft + appNav.clientWidth) >= (appNav.scrollWidth - 6);
-    navScrollHint.classList.toggle('is-visible', isOverflowing && !isEnd);
+    if (!appNav) return;
+    let contentWidth = appNav.scrollWidth;
+    if (appNav.children && appNav.children.length > 0 && typeof appNav.getBoundingClientRect === 'function') {
+      const navRect = appNav.getBoundingClientRect();
+      if (navRect.width > 0) {
+        for (let i = 0; i < appNav.children.length; i++) {
+          const child = appNav.children[i];
+          if (child && !child.hidden && child.style?.display !== 'none' && typeof child.getBoundingClientRect === 'function') {
+            const childRect = child.getBoundingClientRect();
+            const relativeRight = (childRect.right - navRect.left) + (appNav.scrollLeft || 0);
+            if (relativeRight > contentWidth) {
+              contentWidth = relativeRight;
+            }
+          }
+        }
+      }
+    }
+    const isOverflowing = (appNav.scrollWidth > appNav.clientWidth + 2) || (contentWidth > appNav.clientWidth + 2);
+    appNav.classList.toggle('is-scrollable', isOverflowing);
+    appNav.classList.toggle('is-locked', !isOverflowing);
+    if (!isOverflowing && appNav.scrollLeft !== 0) {
+      appNav.scrollLeft = 0;
+    }
+    if (appNav.scrollTop !== 0) {
+      appNav.scrollTop = 0;
+    }
+    if (navScrollHint) {
+      const totalWidth = Math.max(appNav.scrollWidth, contentWidth);
+      const isEnd = (appNav.scrollLeft + appNav.clientWidth) >= (totalWidth - 6);
+      navScrollHint.classList.toggle('is-visible', isOverflowing && !isEnd);
+    }
   }
 
   if (appNav) {
-    appNav.addEventListener('scroll', updateNavScrollHint);
+    appNav.addEventListener('scroll', updateNavScrollHint, { passive: true });
     window.addEventListener('resize', updateNavScrollHint);
+    if (typeof ResizeObserver === 'function') {
+      const navResizeObserver = new ResizeObserver(() => updateNavScrollHint());
+      navResizeObserver.observe(appNav);
+    }
+    updateNavScrollHint();
     setTimeout(updateNavScrollHint, 100);
   }
 
@@ -2625,16 +2661,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnNavAnalytics?.setAttribute('aria-current', viewName === 'analytics' ? 'page' : 'false');
     btnNavSettings?.setAttribute('aria-current', viewName === 'settings' ? 'page' : 'false');
 
-    // Horizontal scroll active tab into view without page vertical jump (Section 5)
+    // Horizontal scroll active tab into view only when nav overflows, preventing vertical/diagonal page jitter
+    updateNavScrollHint();
     const activeBtn = [btnNavRecord, btnNavList, btnNavReview, btnNavAnalytics, btnNavSettings].find(btn => btn?.classList.contains('is-active'));
-    if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+    if (appNav && activeBtn && appNav.scrollWidth > appNav.clientWidth + 2 && typeof appNav.getBoundingClientRect === 'function' && typeof activeBtn.getBoundingClientRect === 'function') {
       try {
-        activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        const navRect = appNav.getBoundingClientRect();
+        const btnRect = activeBtn.getBoundingClientRect();
+        if (btnRect.left < navRect.left || btnRect.right > navRect.right) {
+          const maxScrollLeft = Math.max(0, appNav.scrollWidth - appNav.clientWidth);
+          const rawTargetLeft = btnRect.left < navRect.left
+            ? appNav.scrollLeft - (navRect.left - btnRect.left) - 12
+            : appNav.scrollLeft + (btnRect.right - navRect.right) + 12;
+          const targetLeft = Math.max(0, Math.min(maxScrollLeft, rawTargetLeft));
+          if (typeof appNav.scrollTo === 'function') {
+            appNav.scrollTo({ left: targetLeft, behavior: 'smooth' });
+          } else {
+            appNav.scrollLeft = targetLeft;
+          }
+        }
       } catch {
         // fallback
       }
     }
-    updateNavScrollHint();
 
     if (viewRecordSection) viewRecordSection.style.display = viewName === 'record' ? 'block' : 'none';
     if (viewListSection) viewListSection.style.display = viewName === 'list' ? 'block' : 'none';
@@ -3012,6 +3061,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           btnNavReview.style.display = 'none';
           btnNavReview.setAttribute('hidden', '');
         }
+        updateNavScrollHint();
         try {
           resetViewsForLogout();
         } catch (e) {}
@@ -3105,6 +3155,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             btnNavReview.style.display = 'none';
             btnNavReview.setAttribute('hidden', '');
           }
+          updateNavScrollHint();
         } catch (e) {
           console.warn('UI reset error:', e);
         }
