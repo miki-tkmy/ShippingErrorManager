@@ -526,12 +526,17 @@
             ? item.errorDetails.length
             : ((typeof item.equipmentTypeCount === 'number' && item.equipmentTypeCount > 0) ? item.equipmentTypeCount : 1));
         const attCount = item.attachmentsCount || 0;
+        const isRecoveryRequired = Boolean(item.recoveryRequired === true || item.recoveryStatus === 'RECOVERY_REQUIRED');
+        const recoveryBadge = isRecoveryRequired
+          ? '<span class="badge-review review-ng" style="background:#FEE2E2;color:#991B1B;border:1px solid #EF4444;">データ確認が必要です</span>'
+          : '';
 
         html += `
-          <div class="review-card card" data-id="${escapeHtml(item.shippingCheckId)}" style="cursor:pointer; padding:16px; background:#FFFFFF; border:1px solid var(--color-border); border-radius:var(--radius-sm); transition:all 0.15s ease;">
+          <div class="review-card card" data-id="${escapeHtml(item.shippingCheckId)}" style="cursor:pointer; padding:16px; background:${isRecoveryRequired ? '#FEF2F2' : '#FFFFFF'}; border:1px solid ${isRecoveryRequired ? '#EF4444' : 'var(--color-border)'}; border-radius:var(--radius-sm); transition:all 0.15s ease;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
               <div style="display:flex; align-items:center; gap:8px;">
                 ${badge}
+                ${recoveryBadge}
                 <span style="font-size:0.95rem; font-weight:700; color:var(--color-text-main);">${escapeHtml(item.historicalBaseName || '---')}</span>
                 <span style="font-size:0.82rem; color:var(--color-text-muted);">(${escapeHtml(item.historicalAreaName || 'エリア未設定')})</span>
               </div>
@@ -767,8 +772,33 @@
       };
       const sessionToken = resolveToken();
 
+      const isRecoveryRequired = Boolean(
+        (checkRecord && (checkRecord.recoveryRequired === true || checkRecord.recoveryStatus === 'RECOVERY_REQUIRED')) ||
+        (currentRecord && (currentRecord.recoveryRequired === true || currentRecord.recoveryStatus === 'RECOVERY_REQUIRED'))
+      );
+
       const applyAuthUI = (hasCap, selfRev) => {
         let notice = document.getElementById('reviewAuthNotice');
+        if (isRecoveryRequired) {
+          this.canSubmitReview = false;
+          saveBtn.disabled = true;
+          saveBtn.style.opacity = '0.5';
+          saveBtn.style.cursor = 'not-allowed';
+          saveBtn.title = 'データ確認が必要です（整合性確認待ちのため審査不可）';
+          radios.forEach((r) => { r.disabled = true; });
+          if (commentTxt) commentTxt.disabled = true;
+          if (!notice) {
+            notice = document.createElement('div');
+            notice.id = 'reviewAuthNotice';
+            notice.style.fontSize = '0.85rem';
+            notice.style.color = '#B91C1C';
+            notice.style.fontWeight = '700';
+            notice.style.marginTop = '8px';
+            btnContainer.appendChild(notice);
+          }
+          notice.textContent = '※ データ確認が必要です：前回の更新中断により整合性確認待ちのため、審査判定（OK / NG）の保存はできません。管理者へ連絡してください。';
+          return;
+        }
         if (!hasCap) {
           this.canSubmitReview = false;
           saveBtn.disabled = true;
@@ -808,6 +838,11 @@
           if (notice) notice.remove();
         }
       };
+
+      if (isRecoveryRequired) {
+        applyAuthUI(false, false);
+        return;
+      }
 
       // Check synchronous cached context immediately (CACHE-FIRST for instant UI response)
       const cachedCtx = window.__CURRENT_ACCESS_CONTEXT__;
@@ -882,6 +917,13 @@
 
       if (!targetId) {
         alert('エラー: 審査対象IDが見つかりません。');
+        return;
+      }
+      if (
+        this.currentRecord &&
+        (this.currentRecord.recoveryRequired === true || this.currentRecord.recoveryStatus === 'RECOVERY_REQUIRED')
+      ) {
+        alert('データ確認が必要です：前回の更新中断により整合性確認待ちのため、審査判定の保存はできません。管理者へ連絡してください。');
         return;
       }
       if (!this.canSubmitReview) {
@@ -970,6 +1012,14 @@
           });
         } else {
           throw new Error('RPCクライアントが利用できません');
+        }
+
+        if (res && res.ok === false) {
+          const rCode = (res.error && res.error.code) || 'REVIEW_SAVE_FAILED';
+          const rMsg = (res.error && res.error.message) || '審査判定の保存に失敗しました。';
+          const rErr = new Error(rMsg);
+          rErr.code = rCode;
+          throw rErr;
         }
 
         const data = (res && res.payload) ? res.payload : res;

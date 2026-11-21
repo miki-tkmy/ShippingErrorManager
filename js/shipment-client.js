@@ -102,6 +102,7 @@
     this.rpcClient = opts.rpcClient;
     this.sessionClient = opts.sessionClient || null;
     this.currentSubmissionId = null;
+    this.lastAttemptedSubmissionId = null;
     this.inputStartedAt = null;
     this.isSubmitting = false;
 
@@ -115,6 +116,67 @@
   ShipmentClient.prototype.startNewSubmission = function () {
     this.currentSubmissionId = generateUuidV4();
     this.inputStartedAt = new Date().toISOString();
+  };
+
+  ShipmentClient.prototype.getCurrentSubmissionId = function () {
+    if (!this.currentSubmissionId) {
+      this.startNewSubmission();
+    }
+    return this.currentSubmissionId;
+  };
+
+  /**
+   * Uploads a single evidence file (photo or PDF) to Google Drive in staged state,
+   * bound to the active currentSubmissionId for idempotent retry safety.
+   */
+  ShipmentClient.prototype.uploadAttachment = function (uploadRequest, tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+    var subId = this.getCurrentSubmissionId();
+    var reqPayload = Object.assign({}, uploadRequest || {}, {
+      clientSubmissionId: subId
+    });
+    return this.rpcClient.call('attachment.upload', {
+      sessionToken: token,
+      request: reqPayload
+    }, { isMutation: true, timeoutMs: 60000 }).then(function (res) {
+      var data = (res && res.payload) ? res.payload : (res || {});
+      return Object.assign({}, data, { clientSubmissionId: subId });
+    });
+  };
+
+  /**
+   * Discards an uncommitted staged attachment in Google Drive when cancelled before registration.
+   */
+  ShipmentClient.prototype.discardStagedAttachment = function (stagedInfo, tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token || !stagedInfo || !stagedInfo.driveFileId) {
+      return Promise.resolve({ discarded: false });
+    }
+    var reqPayload = Object.assign({}, stagedInfo, {
+      clientSubmissionId: stagedInfo.clientSubmissionId || this.getCurrentSubmissionId()
+    });
+    return this.rpcClient.call('attachment.discardStaged', {
+      sessionToken: token,
+      request: reqPayload
+    }, { isMutation: true });
+  };
+
+  /**
+   * Retrieves binary content (Base64) of an authorized attachment for preview/viewing.
+   */
+  ShipmentClient.prototype.getAttachmentContent = function (shippingCheckId, attachmentId, tokenOverride) {
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+    return this.rpcClient.call('attachment.getContent', {
+      sessionToken: token,
+      shippingCheckId: shippingCheckId,
+      attachmentId: attachmentId
+    }, { timeoutMs: 60000 });
   };
 
   /**
@@ -137,18 +199,138 @@
     }
 
     this.isSubmitting = true;
+    var subId = this.getCurrentSubmissionId();
+    this.lastAttemptedSubmissionId = subId;
 
     // Attach client-controlled idempotency and clock fields
     var requestPayload = Object.assign({}, formData, {
-      clientSubmissionId: this.currentSubmissionId,
+      clientSubmissionId: subId,
       inputStartedAt: this.inputStartedAt
     });
 
     return this.rpcClient.call('shipment.create', {
       sessionToken: token,
       request: requestPayload
-    }).then(function (res) {
+    }, { isMutation: true, timeoutMs: 45000 }).then(function (res) {
       // Rotate submission state ONLY on success
+      self.startNewSubmission();
+      return res;
+    }).finally(function () {
+      self.isSubmitting = false;
+    });
+  };
+
+  /**
+   * Saves or updates a server-persisted ShipmentDraft scoped to the caller's Base.
+   *
+   * @param {Object} draftData
+   * @param {string} [tokenOverride]
+   * @return {Promise<Object>}
+   */
+  ShipmentClient.prototype.saveDraft = function (draftData, tokenOverride) {
+    var self = this;
+    if (this.isSubmitting) {
+      return Promise.reject(new Error('SUBMISSION_IN_PROGRESS: Please wait for current submission to complete.'));
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    this.isSubmitting = true;
+    var subId = this.getCurrentSubmissionId();
+    this.lastAttemptedSubmissionId = subId;
+
+    var requestPayload = Object.assign({}, draftData || {}, {
+      clientSubmissionId: subId,
+      inputStartedAt: (draftData && draftData.inputStartedAt) ? draftData.inputStartedAt : this.inputStartedAt
+    });
+
+    return this.rpcClient.call('shipment.saveDraft', {
+      sessionToken: token,
+      request: requestPayload
+    }, { isMutation: true, timeoutMs: 45000 }).then(function (res) {
+      self.startNewSubmission();
+      return res;
+    }).finally(function () {
+      self.isSubmitting = false;
+    });
+  };
+
+  /**
+   * Completes a ShipmentCheck registration (either promoting an existing own-Base ShipmentDraft
+   * or registering directly) with mandatory guidance confirmation.
+   *
+   * @param {Object} formData
+   * @param {string} [tokenOverride]
+   * @return {Promise<Object>}
+   */
+  ShipmentClient.prototype.completeShipment = function (formData, tokenOverride) {
+    var self = this;
+    if (this.isSubmitting) {
+      return Promise.reject(new Error('SUBMISSION_IN_PROGRESS: Please wait for current submission to complete.'));
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    this.isSubmitting = true;
+    var subId = this.getCurrentSubmissionId();
+    this.lastAttemptedSubmissionId = subId;
+
+    var requestPayload = Object.assign({}, formData || {}, {
+      clientSubmissionId: subId,
+      inputStartedAt: (formData && formData.inputStartedAt) ? formData.inputStartedAt : this.inputStartedAt
+    });
+
+    return this.rpcClient.call('shipment.complete', {
+      sessionToken: token,
+      request: requestPayload
+    }, { isMutation: true, timeoutMs: 45000 }).then(function (res) {
+      self.startNewSubmission();
+      return res;
+    }).finally(function () {
+      self.isSubmitting = false;
+    });
+  };
+
+  /**
+   * Updates an existing completed ShipmentCheck within the same Base (co-editing)
+   * with Optimistic Concurrency Control (expectedRevision) and mandatory guidance confirmation.
+   *
+   * @param {string} shippingCheckId
+   * @param {Object} formData
+   * @param {string} [tokenOverride]
+   * @return {Promise<Object>}
+   */
+  ShipmentClient.prototype.updateShipment = function (shippingCheckId, formData, tokenOverride) {
+    var self = this;
+    if (this.isSubmitting) {
+      return Promise.reject(new Error('SUBMISSION_IN_PROGRESS: Please wait for current submission to complete.'));
+    }
+
+    var token = resolveSessionToken_(this.sessionClient, tokenOverride);
+    if (!token) {
+      return Promise.reject(new Error('UNAUTHENTICATED: Valid sessionToken is required.'));
+    }
+
+    this.isSubmitting = true;
+    var subId = this.getCurrentSubmissionId();
+    this.lastAttemptedSubmissionId = subId;
+
+    var requestPayload = Object.assign({}, formData || {}, {
+      clientSubmissionId: subId,
+      inputStartedAt: (formData && formData.inputStartedAt) ? formData.inputStartedAt : this.inputStartedAt
+    });
+
+    return this.rpcClient.call('shipment.update', {
+      sessionToken: token,
+      shippingCheckId: shippingCheckId,
+      request: requestPayload
+    }, { isMutation: true, timeoutMs: 45000 }).then(function (res) {
       self.startNewSubmission();
       return res;
     }).finally(function () {

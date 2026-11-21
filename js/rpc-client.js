@@ -79,7 +79,11 @@
       return rawErr;
     }
     if (typeof rawErr === 'object' && rawErr.name === 'TransportError' && rawErr.isSafeMessage === true && rawErr.code) {
-      return createNormalizedError(rawErr.code, rawErr.message, { raw: rawErr });
+      var normErr = createNormalizedError(rawErr.code, rawErr.message, { raw: rawErr });
+      if (rawErr.stagedAttachmentsCleaned === true) {
+        normErr.stagedAttachmentsCleaned = true;
+      }
+      return normErr;
     }
     var msg = (typeof rawErr === 'object' && rawErr.message)
       ? String(rawErr.message)
@@ -98,8 +102,19 @@
    */
   function defaultIsMutation(action, options) {
     var act = String(action || '').toLowerCase();
-    // 1. Explicit canonical mutation actions (Section 47: auth.login, auth.logout, auth.changePassword, shipment.review)
-    var explicitMutations = ['auth.login', 'auth.logout', 'auth.changepassword', 'login', 'logout', 'changepassword', 'shipment.review'];
+    // 1. Explicit canonical mutation actions (Section 47: auth.login, auth.logout, auth.changePassword, shipment.review, collaborative draft/complete/update)
+    var explicitMutations = [
+      'auth.login',
+      'auth.logout',
+      'auth.changepassword',
+      'login',
+      'logout',
+      'changepassword',
+      'shipment.review',
+      'shipment.savedraft',
+      'shipment.complete',
+      'shipment.update'
+    ];
     for (var m = 0; m < explicitMutations.length; m++) {
       if (act === explicitMutations[m]) {
         return true;
@@ -113,7 +128,7 @@
       }
     }
     // 3. Known mutation verbs / canonical mutation actions cannot be bypassed by options.isMutation: false
-    var mutationVerbs = ['create', 'update', 'delete', 'save', 'commit', 'post', 'put', 'submit', 'mutate', 'sync', 'upload', 'enroll', 'revoke', 'review'];
+    var mutationVerbs = ['create', 'update', 'delete', 'save', 'complete', 'commit', 'post', 'put', 'submit', 'mutate', 'sync', 'upload', 'enroll', 'revoke', 'review'];
     for (var i = 0; i < mutationVerbs.length; i++) {
       if (act.indexOf(mutationVerbs[i]) !== -1) {
         return true;
@@ -332,11 +347,15 @@
               task.resolve(response);
             } else {
               var errObj = response.error || {};
-              task.reject(createNormalizedError(
+              var srvErr = createNormalizedError(
                 errObj.code || 'SERVER_ERROR',
                 errObj.message || 'Server reported an error.',
                 response
-              ));
+              );
+              if (errObj.stagedAttachmentsCleaned === true) {
+                srvErr.stagedAttachmentsCleaned = true;
+              }
+              task.reject(srvErr);
             }
           })
           .catch(function (failure) {
@@ -381,11 +400,15 @@
             task.resolve(response);
           } else {
             var errObj = response.error || {};
-            task.reject(createNormalizedError(
+            var gsrErr = createNormalizedError(
               errObj.code || 'SERVER_ERROR',
               errObj.message || 'Server reported an error.',
               response
-            ));
+            );
+            if (errObj.stagedAttachmentsCleaned === true) {
+              gsrErr.stagedAttachmentsCleaned = true;
+            }
+            task.reject(gsrErr);
           }
         })
         .withFailureHandler(function (failure) {

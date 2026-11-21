@@ -143,6 +143,13 @@
       const b = newList[i];
       if (!a || !b) return false;
       if (a.shippingCheckId !== b.shippingCheckId) return false;
+      if (a.recordStatus !== b.recordStatus) return false;
+      if (a.revision !== b.revision) return false;
+      if (a.updatedAt !== b.updatedAt) return false;
+      if (a.guidanceConfirmed !== b.guidanceConfirmed) return false;
+      if (a.looseItemCreatorsCount !== b.looseItemCreatorsCount) return false;
+      if (a.attachmentsCount !== b.attachmentsCount) return false;
+      if (a.recoveryRequired !== b.recoveryRequired) return false;
       if (a.reviewStatus !== b.reviewStatus) return false;
       if (a.reviewedAt !== b.reviewedAt) return false;
       if (a.reviewComment !== b.reviewComment) return false;
@@ -164,16 +171,29 @@
       this.ttlMs = ttlMs;
       this.cache = new Map();
       this.inFlight = new Map();
+      this.detailInFlight = new Map();
+    }
+
+    _resolveRuntimeEnv(scopeEnv) {
+      if (scopeEnv && typeof scopeEnv === 'string') return scopeEnv.trim();
+      if (typeof window !== 'undefined' && window.__SHIPPING_ERROR_RUNTIME_CONFIG__?.environment) {
+        return String(window.__SHIPPING_ERROR_RUNTIME_CONFIG__.environment).trim();
+      }
+      return 'DEFAULT';
     }
 
     /**
-     * Constructs a scoped deterministic cache key.
+     * Constructs a scoped deterministic cache key including environment, user, Base, recordStatus, and schema version.
      */
     buildKey(scope) {
-      if (!scope || typeof scope !== 'object') return 'shipment.list:default';
+      if (!scope || typeof scope !== 'object') return 'shipment.list:DEFAULT:ANON:ALL:ALL:v2';
+      const env = this._resolveRuntimeEnv(scope.env);
       const action = scope.action || 'shipment.list';
       const empNo = scope.empNo || 'ANON';
+      const callerBaseCode = scope.callerBaseCode || '';
       const baseCode = scope.baseCode || 'ALL';
+      const recordStatus = scope.recordStatus ? String(scope.recordStatus).toUpperCase() : 'ALL';
+      const includeDrafts = scope.includeDrafts === false ? 'noDrafts' : 'withDrafts';
       const month = scope.month || '';
       const startDate = scope.startDate || '';
       const endDate = scope.endDate || '';
@@ -182,7 +202,49 @@
       const unreviewedOnly = scope.unreviewedOnly ? 'unreviewed' : 'all';
       const area = scope.area || '全国';
 
-      return [action, empNo, baseCode, month, startDate, endDate, page, limit, unreviewedOnly, area].join(':');
+      return [
+        action,
+        env,
+        empNo,
+        callerBaseCode,
+        baseCode,
+        recordStatus,
+        includeDrafts,
+        month,
+        startDate,
+        endDate,
+        page,
+        limit,
+        unreviewedOnly,
+        area,
+        'v2'
+      ].join(':');
+    }
+
+    /**
+     * Deduplicates simultaneous identical detail reads without persisting stale Revision across time.
+     */
+    async fetchDetailWithDeduplication(detailKey, fetcherFn) {
+      const safeKey = String(detailKey || '');
+      if (safeKey && this.detailInFlight.has(safeKey)) {
+        const shared = this.detailInFlight.get(safeKey);
+        const data = await shared;
+        return { data: data, deduplicated: true };
+      }
+      const p = (async () => {
+        try {
+          return await fetcherFn();
+        } finally {
+          if (safeKey) {
+            this.detailInFlight.delete(safeKey);
+          }
+        }
+      })();
+      if (safeKey) {
+        this.detailInFlight.set(safeKey, p);
+      }
+      const data = await p;
+      return { data: data, deduplicated: false };
     }
 
     get(key) {
@@ -244,6 +306,7 @@
     invalidateAll() {
       this.cache.clear();
       this.inFlight.clear();
+      this.detailInFlight.clear();
     }
 
     invalidateUser(empNo) {
@@ -253,11 +316,13 @@
           this.cache.delete(k);
         }
       }
+      this.detailInFlight.clear();
     }
 
     invalidateMutations() {
-      // Clear shipment.list and review caches on create or review
+      // Clear shipment.list and review caches on create, draft save, update, or review
       this.cache.clear();
+      this.detailInFlight.clear();
     }
   }
 

@@ -32,6 +32,18 @@ class MasterApiClient {
     this.baseStaffCachedAt = 0;
     this.cachedBaseStaffBaseCode = '';
     this.cachedBaseStaffBaseName = '';
+    this.cachedContextSignature = '';
+    this.formOptionsTtlMs = 300000; // 5 minutes short-lived browser memory cache
+    this.baseStaffTtlMs = 300000;   // 5 minutes short-lived browser memory cache
+  }
+
+  _resolveCurrentContextSignature() {
+    if (typeof window === 'undefined') return 'NODE::DEFAULT::ALL';
+    const env = String(window.__SHIPPING_ERROR_RUNTIME_CONFIG__?.environment || 'DEFAULT').trim();
+    const ctx = window.__CURRENT_ACCESS_CONTEXT__;
+    const empNo = String(ctx?.empNo || '').trim();
+    const baseCode = String(ctx?.baseCode || ctx?.baseId || '').trim();
+    return `${env}::${empNo}::${baseCode}`;
   }
 
   clearCache() {
@@ -40,6 +52,7 @@ class MasterApiClient {
     this.baseStaffCachedAt = 0;
     this.cachedBaseStaffBaseCode = '';
     this.cachedBaseStaffBaseName = '';
+    this.cachedContextSignature = '';
     this.cachedFormOptions = null;
     this.cachedEmployees = null;
     this.cachedPartners = null;
@@ -130,7 +143,11 @@ class MasterApiClient {
    * @return {Promise<Object>} Form options payload
    */
   async loadFormOptions(forceRefresh = false) {
-    const isExpired = !this.formOptionsCachedAt || (Date.now() - this.formOptionsCachedAt > 60000);
+    const currentSig = this._resolveCurrentContextSignature();
+    if (this.cachedContextSignature && this.cachedContextSignature !== currentSig) {
+      this.clearCache();
+    }
+    const isExpired = !this.formOptionsCachedAt || (Date.now() - this.formOptionsCachedAt > this.formOptionsTtlMs);
     if (!forceRefresh && !isExpired && this.cachedFormOptions) {
       return this.cachedFormOptions;
     }
@@ -234,6 +251,7 @@ class MasterApiClient {
 
         this.cachedFormOptions = payload;
         this.formOptionsCachedAt = Date.now();
+        this.cachedContextSignature = this._resolveCurrentContextSignature();
 
         // Populate Bases
         if (Array.isArray(payload.bases)) {
@@ -353,6 +371,14 @@ class MasterApiClient {
         });
         this.cachedAreas = Array.from(areaSet).sort();
 
+        const resolvedFormBaseCode = String(payload.baseCode || payload.callerBaseCode || '').trim();
+        const resolvedFormBaseName = String(payload.callerBaseName || payload.baseName || '').trim();
+        if (resolvedFormBaseCode || Array.isArray(payload.liftOperators) || Array.isArray(payload.looseItemCreators)) {
+          this.baseStaffCachedAt = Date.now();
+          if (resolvedFormBaseCode) this.cachedBaseStaffBaseCode = resolvedFormBaseCode;
+          if (resolvedFormBaseName) this.cachedBaseStaffBaseName = resolvedFormBaseName;
+        }
+
         return payload;
       } finally {
         if (currentSeq === this.loadSeq) {
@@ -453,8 +479,21 @@ class MasterApiClient {
    */
   async listBaseStaff(options = {}) {
     const { baseCode = '', forceRefresh = false } = options;
+    const currentSig = this._resolveCurrentContextSignature();
+    if (this.cachedContextSignature && this.cachedContextSignature !== currentSig) {
+      this.clearCache();
+    }
     const normReqBase = String(baseCode || '').trim();
-    const isCacheFresh = Boolean(this.baseStaffCachedAt && (Date.now() - this.baseStaffCachedAt < 30000));
+
+    if (!forceRefresh && this.inFlightFormOptionsPromise) {
+      try {
+        await this.inFlightFormOptionsPromise;
+      } catch (eShared) {
+        // Fall through to dedicated listBaseStaff if loadFormOptions failed
+      }
+    }
+
+    const isCacheFresh = Boolean(this.baseStaffCachedAt && (Date.now() - this.baseStaffCachedAt < this.baseStaffTtlMs));
     if (
       !forceRefresh &&
       isCacheFresh &&

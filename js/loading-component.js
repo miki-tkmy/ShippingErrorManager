@@ -42,9 +42,13 @@
    */
   LoadingManager.prototype._getProgressBar = function () {
     if (typeof document === 'undefined') return null;
-    if (!this.progressBarEl) {
+    if (
+      !this.progressBarEl ||
+      this.progressBarEl.ownerDocument !== document ||
+      (document.body && !document.body.contains(this.progressBarEl))
+    ) {
       this.progressBarEl = document.getElementById('globalProgressBar');
-      if (!this.progressBarEl) {
+      if (!this.progressBarEl && document.body) {
         this.progressBarEl = document.createElement('div');
         this.progressBarEl.id = 'globalProgressBar';
         this.progressBarEl.className = 'progress-bar-indeterminate';
@@ -102,33 +106,60 @@
     }
   };
 
+  function escapeLoaderHtml_(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   /**
    * Shows blocking modal loader.
    *
    * @param {string} [message] Loading message text
+   * @param {string} [subMessage] Optional secondary guidance text
    */
-  LoadingManager.prototype.showBlockingLoader = function (message) {
+  LoadingManager.prototype.showBlockingLoader = function (message, subMessage) {
     if (typeof document === 'undefined') return;
-    this.activeOperations++;
-    if (!this.blockingLoaderEl) {
+    if (
+      !this.blockingLoaderEl ||
+      this.blockingLoaderEl.ownerDocument !== document ||
+      (document.body && !document.body.contains(this.blockingLoaderEl))
+    ) {
+      this.activeOperations = 0;
       this.blockingLoaderEl = document.getElementById('globalBlockingLoader');
-      if (!this.blockingLoaderEl) {
+      if (!this.blockingLoaderEl && document.body) {
         this.blockingLoaderEl = document.createElement('div');
         this.blockingLoaderEl.id = 'globalBlockingLoader';
         this.blockingLoaderEl.className = 'blocking-loader-overlay';
         this.blockingLoaderEl.setAttribute('role', 'alertdialog');
         this.blockingLoaderEl.setAttribute('aria-modal', 'true');
+        this.blockingLoaderEl.setAttribute('aria-live', 'polite');
         document.body.appendChild(this.blockingLoaderEl);
       }
     }
-    var msg = message || '処理中...';
+    this.activeOperations++;
+    if (!this.blockingLoaderEl) return;
+    this.updateBlockingLoaderMessage(message || '処理中...', subMessage || '');
+    this.blockingLoaderEl.style.display = 'flex';
+  };
+
+  /**
+   * Updates message / subMessage on an already-open blocking loader without incrementing activeOperations.
+   */
+  LoadingManager.prototype.updateBlockingLoaderMessage = function (message, subMessage) {
+    if (!this.blockingLoaderEl) return;
+    var msg = escapeLoaderHtml_(message || '処理中...');
+    var sub = subMessage ? escapeLoaderHtml_(subMessage) : '';
     this.blockingLoaderEl.innerHTML = [
       '<div class="blocking-loader-box">',
       '  <div class="blocking-spinner" aria-hidden="true"></div>',
-      '  <div class="blocking-text" style="font-weight: 600; color: #1E293B;">' + msg + '</div>',
+      '  <div class="blocking-text" id="globalBlockingLoaderTitle" style="font-weight: 700; font-size: 1rem; color: #1E293B;">' + msg + '</div>',
+      (sub ? '  <div class="blocking-subtext" id="globalBlockingLoaderSubtext">' + sub + '</div>' : ''),
       '</div>'
     ].join('');
-    this.blockingLoaderEl.style.display = 'flex';
   };
 
   /**

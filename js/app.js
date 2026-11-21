@@ -291,10 +291,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
       formState.setEmployee(emp, false);
       updateEmployeeUI({ skipStaffFetch: true });
+      ensureNewRecordDefaultLoadingDate();
     }
 
-    // 4. Populate Base-scoped dropdowns for LiftOperators & LooseItemCreators
-    await populateBaseStaffDropdowns(true);
+    // 4. Background prefetch form options & populate Base-scoped dropdowns (single shared RPC)
+    if (masterClient && typeof masterClient.loadFormOptions === 'function') {
+      masterClient.loadFormOptions(false).catch(() => { });
+    }
+    await populateBaseStaffDropdowns(false);
   }
 
   // 4. Session Validation & Restore (SIMPLE_EMPLOYEE_LOGIN & Auto-login)
@@ -320,9 +324,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const res = await authClient.simpleLogin(savedEmpNo);
         const ctx = (res && res.context) ? res.context : (await authClient.getAccessContext());
         if (ctx && ctx.empNo) {
-          await applyAccessContext(ctx);
+          currentAccessContext = ctx;
+          window.__CURRENT_ACCESS_CONTEXT__ = ctx;
           hideLoginModal();
           switchView('record');
+          await applyAccessContext(ctx);
           return true;
         } else {
           throw new Error('Access context missing empNo');
@@ -350,9 +356,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         const ctx = await authClient.getAccessContext();
         if (ctx && ctx.empNo) {
-          await applyAccessContext(ctx);
+          currentAccessContext = ctx;
+          window.__CURRENT_ACCESS_CONTEXT__ = ctx;
           hideLoginModal();
           switchView('record');
+          await applyAccessContext(ctx);
           return true;
         } else {
           throw new Error('Access context missing empNo');
@@ -426,12 +434,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   const accordionHeader = document.getElementById('accordionHeader');
 
   const txtLooseItemCreator = document.getElementById('txtLooseItemCreator');
+  const txtSearchLooseItemCreator = document.getElementById('txtSearchLooseItemCreator');
+  const looseCreatorSearchDropdown = document.getElementById('looseCreatorSearchDropdown');
+  const looseCreatorPickerWrapper = document.getElementById('looseCreatorPickerWrapper');
+  const selectedLooseCreatorsChips = document.getElementById('selectedLooseCreatorsChips');
   const looseItemCreatorEmptyNotice = document.getElementById('looseItemCreatorEmptyNotice');
   const looseItemCreatorError = document.getElementById('looseItemCreatorError');
   const txtLooseItemStatus = document.getElementById('txtLooseItemStatus');
   const selTransportCategory = document.getElementById('selTransportCategory');
   const txtCarrierName = document.getElementById('txtCarrierName');
   const txtDriverName = document.getElementById('txtDriverName');
+
+  // Collaborative Draft, Guidance & Editing Mode DOM Elements
+  const recordViewHeading = document.getElementById('recordViewHeading');
+  const editingModeBanner = document.getElementById('editingModeBanner');
+  const editingModeBadge = document.getElementById('editingModeBadge');
+  const editingRevisionBadge = document.getElementById('editingRevisionBadge');
+  const editingModeDescription = document.getElementById('editingModeDescription');
+  const editingReviewResetWarning = document.getElementById('editingReviewResetWarning');
+  const btnCancelEditingMode = document.getElementById('btnCancelEditingMode');
+  const chkGuidanceConfirmed = document.getElementById('chkGuidanceConfirmed');
+  const guidanceCheckError = document.getElementById('guidanceCheckError');
+  const btnSaveDraft = document.getElementById('btnSaveDraft');
+  const submitButtonsGrid = document.getElementById('submitButtonsGrid');
+  const revisionConflictBanner = document.getElementById('revisionConflictBanner');
+  const revisionConflictMessage = document.getElementById('revisionConflictMessage');
+  const btnReloadLatestOnConflict = document.getElementById('btnReloadLatestOnConflict');
 
   // Settings View DOM Elements
   const lblSettingsCurrentBase = document.getElementById('lblSettingsCurrentBase');
@@ -467,10 +495,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const employeeSearchInput = document.getElementById('employeeSearchInput');
   const employeeList = document.getElementById('employeeList');
 
+  function ensureNewRecordDefaultLoadingDate() {
+    if (!formState || formState.editingMode !== 'NEW') {
+      return;
+    }
+    if (!formState.explicitFlags.loadingDate && !formState.loadingDate) {
+      formState.loadingDate = typeof formState.generateTokyoDate === 'function'
+        ? formState.generateTokyoDate()
+        : formState.generateLocalDate();
+    }
+    if (txtLoadingDate && formState.loadingDate && !txtLoadingDate.value) {
+      txtLoadingDate.value = formState.loadingDate;
+    }
+  }
+
   // 1. Initialize inputStartAt and loadingDate
   if (txtInputStartedAt) txtInputStartedAt.value = formState.inputStartAt;
   if (txtLoadingDate) {
     txtLoadingDate.value = formState.loadingDate;
+    ensureNewRecordDefaultLoadingDate();
     txtLoadingDate.addEventListener('change', (e) => {
       formState.setLoadingDate(e.target.value);
     });
@@ -1008,27 +1051,28 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
 
-        // Preserve selection only if it belongs to current Base and refresh its latest partner info
-        const selectedCreatorCode = (formState.selectedLooseItemCreator && formState.selectedLooseItemCreator.looseItemCreatorCode) || '';
-        const selectedCreatorName = formState.looseItemCreatorName || '';
-        const stillValidCreator = currentBaseLooseItemCreators.find(c =>
-          (selectedCreatorCode && c.looseItemCreatorCode === selectedCreatorCode) ||
-          (selectedCreatorName && c.looseItemCreatorName === selectedCreatorName)
-        );
-        if (stillValidCreator) {
-          if (typeof formState.selectLooseItemCreator === 'function') {
-            formState.selectLooseItemCreator(stillValidCreator);
-          } else {
-            formState.looseItemCreatorName = stillValidCreator.looseItemCreatorName;
+        // Preserve multi-select creators belonging to current Base (or historical creators in EDIT_COMPLETED mode)
+        const existingSelected = Array.isArray(formState.selectedLooseItemCreators)
+          ? formState.selectedLooseItemCreators.slice()
+          : [];
+        const refreshedCreators = [];
+        for (const selC of existingSelected) {
+          const matchedMaster = currentBaseLooseItemCreators.find(c =>
+            (selC.looseItemCreatorCode && c.looseItemCreatorCode === selC.looseItemCreatorCode) ||
+            (selC.looseItemCreatorName && c.looseItemCreatorName === selC.looseItemCreatorName)
+          );
+          if (matchedMaster) {
+            refreshedCreators.push(matchedMaster);
+          } else if (formState.editingMode === 'EDIT_COMPLETED' && (!selC.baseCode || selC.baseCode === currentBaseCode)) {
+            refreshedCreators.push(selC);
           }
-          txtLooseItemCreator.value = stillValidCreator.looseItemCreatorName;
-        } else {
-          if (typeof formState.clearLooseItemCreator === 'function') {
-            formState.clearLooseItemCreator();
-          } else {
-            formState.looseItemCreatorName = '';
-          }
-          txtLooseItemCreator.value = '';
+        }
+        if (typeof formState.setLooseItemCreators === 'function') {
+          formState.setLooseItemCreators(refreshedCreators);
+        }
+        txtLooseItemCreator.value = refreshedCreators.length > 0 ? refreshedCreators[0].looseItemCreatorName : '';
+        if (typeof renderSelectedLooseCreatorsChips === 'function') {
+          renderSelectedLooseCreatorsChips();
         }
       }
 
@@ -1195,7 +1239,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  driverSearchInput.addEventListener('input', (e) => loadDriversToModal(e.target.value.trim()));
+  let driverSearchDebounceTimer = null;
+  driverSearchInput.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    if (driverSearchDebounceTimer) clearTimeout(driverSearchDebounceTimer);
+    driverSearchDebounceTimer = setTimeout(() => {
+      driverSearchDebounceTimer = null;
+      loadDriversToModal(val);
+    }, 150);
+  });
 
   chkShowAllDrivers.addEventListener('change', async (e) => {
     formState.setShowAllDrivers(e.target.checked);
@@ -1214,8 +1266,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Event Listeners for Modal & User Change
   btnChangeUser.addEventListener('click', openEmployeeModal);
   btnCloseModal.addEventListener('click', closeEmployeeModal);
+  let employeeSearchDebounceTimer = null;
   employeeSearchInput.addEventListener('input', (e) => {
-    loadEmployeesToModal(e.target.value.trim());
+    const val = e.target.value.trim();
+    if (employeeSearchDebounceTimer) clearTimeout(employeeSearchDebounceTimer);
+    employeeSearchDebounceTimer = setTimeout(() => {
+      employeeSearchDebounceTimer = null;
+      loadEmployeesToModal(val);
+    }, 150);
   });
   btnRetryMaster.addEventListener('click', initEmployee);
 
@@ -1245,11 +1303,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateCount(e.target.value);
   });
 
-  // 5. Bara Toggle (UI-REVIEW-003: はい / いいえ)
+  // 5. Bara Toggle (UI-REVIEW-003: はい / いいえ, plus unset draft state)
   const looseItemFieldsContainer = document.getElementById('looseItemFieldsContainer');
   function updateLooseFieldsVisibility() {
     if (looseItemFieldsContainer) {
-      looseItemFieldsContainer.style.display = formState.hasLooseItems ? 'block' : 'none';
+      looseItemFieldsContainer.style.display = formState.hasLooseItems === null
+        ? 'block'
+        : (formState.hasLooseItems ? 'block' : 'none');
     }
   }
 
@@ -1274,34 +1334,415 @@ document.addEventListener('DOMContentLoaded', async () => {
     accordionHeader.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   });
 
-  // 7. Optional fields 2-way binding (LooseItemCreator dropdown + text inputs)
+  // 7. Searchable Multi-Select LooseItemCreator UI & Optional Field Bindings
+  function renderSelectedLooseCreatorsChips() {
+    if (!selectedLooseCreatorsChips) return;
+    selectedLooseCreatorsChips.innerHTML = '';
+    const selected = Array.isArray(formState.selectedLooseItemCreators)
+      ? formState.selectedLooseItemCreators
+      : [];
+
+    selected.forEach((c) => {
+      const chip = document.createElement('span');
+      chip.className = 'creator-chip';
+      const key = c.looseItemCreatorCode || c.looseItemCreatorName;
+      const partnerPart = c.partnerName ? `（${escapeHtml(c.partnerName)}）` : '';
+      chip.innerHTML =
+        `<span class="creator-chip-label">${escapeHtml(c.looseItemCreatorName)}${partnerPart}</span>` +
+        `<button type="button" class="creator-chip-remove" data-creator-key="${escapeHtml(key)}" aria-label="${escapeHtml(c.looseItemCreatorName)} を選択解除">×</button>`;
+      selectedLooseCreatorsChips.appendChild(chip);
+    });
+
+    if (txtLooseItemCreator) {
+      txtLooseItemCreator.value = selected.length > 0 ? selected[0].looseItemCreatorName : '';
+    }
+  }
+
+  function closeLooseCreatorDropdown() {
+    if (looseCreatorSearchDropdown) {
+      looseCreatorSearchDropdown.style.display = 'none';
+    }
+  }
+
+  function renderLooseCreatorSearchDropdown(query = '') {
+    if (!looseCreatorSearchDropdown) return;
+    looseCreatorSearchDropdown.innerHTML = '';
+
+    if (!currentBaseLooseItemCreators || currentBaseLooseItemCreators.length === 0) {
+      looseCreatorSearchDropdown.innerHTML =
+        '<div class="loose-creator-empty">この拠点に登録されたバラ作成担当者はいません。「設定」画面から追加してください。</div>';
+      looseCreatorSearchDropdown.style.display = 'block';
+      return;
+    }
+
+    const matches = typeof formState.searchLooseItemCreators === 'function'
+      ? formState.searchLooseItemCreators(currentBaseLooseItemCreators, query)
+      : currentBaseLooseItemCreators;
+
+    if (matches.length === 0) {
+      looseCreatorSearchDropdown.innerHTML =
+        '<div class="loose-creator-empty">条件に一致するバラ作成担当者が見つかりません。</div>';
+      looseCreatorSearchDropdown.style.display = 'block';
+      return;
+    }
+
+    matches.forEach((c) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'loose-creator-option' + (c.isSelected ? ' is-selected' : '');
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-selected', c.isSelected ? 'true' : 'false');
+      const partnerLabel = c.partnerName ? `（${escapeHtml(c.partnerName)}）` : '';
+      const codeLabel = c.looseItemCreatorCode ? ` <span style="font-size:0.76rem;color:#64748B;">[${escapeHtml(c.looseItemCreatorCode)}]</span>` : '';
+      const statusBadge = c.isSelected
+        ? '<span class="badge" style="background:#DBEAFE;color:#1E40AF;font-size:0.75rem;">選択済</span>'
+        : '<span style="font-size:0.8rem;color:#1D4ED8;font-weight:700;">＋追加</span>';
+
+      btn.innerHTML =
+        `<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;"><strong>${escapeHtml(c.looseItemCreatorName)}</strong>${partnerLabel}${codeLabel}</span>` +
+        statusBadge;
+
+      btn.addEventListener('click', () => {
+        if (!c.isSelected) {
+          formState.addLooseItemCreator(c);
+          renderSelectedLooseCreatorsChips();
+          if (txtSearchLooseItemCreator) {
+            txtSearchLooseItemCreator.value = '';
+          }
+          renderLooseCreatorSearchDropdown('');
+        }
+      });
+      looseCreatorSearchDropdown.appendChild(btn);
+    });
+
+    looseCreatorSearchDropdown.style.display = 'block';
+  }
+
+  if (selectedLooseCreatorsChips) {
+    selectedLooseCreatorsChips.addEventListener('click', (e) => {
+      const remBtn = e.target.closest('.creator-chip-remove');
+      if (!remBtn) return;
+      const key = remBtn.getAttribute('data-creator-key');
+      if (key) {
+        formState.removeLooseItemCreator(key);
+        renderSelectedLooseCreatorsChips();
+        if (looseCreatorSearchDropdown && looseCreatorSearchDropdown.style.display !== 'none') {
+          renderLooseCreatorSearchDropdown(txtSearchLooseItemCreator ? txtSearchLooseItemCreator.value : '');
+        }
+      }
+    });
+  }
+
+  if (txtSearchLooseItemCreator) {
+    txtSearchLooseItemCreator.addEventListener('focus', () => {
+      renderLooseCreatorSearchDropdown(txtSearchLooseItemCreator.value);
+    });
+    txtSearchLooseItemCreator.addEventListener('input', (e) => {
+      renderLooseCreatorSearchDropdown(e.target.value);
+    });
+    txtSearchLooseItemCreator.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeLooseCreatorDropdown();
+      }
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (looseCreatorPickerWrapper && !looseCreatorPickerWrapper.contains(e.target)) {
+      closeLooseCreatorDropdown();
+    }
+  });
+
   if (txtLooseItemCreator) {
     const onLooseCreatorChange = (e) => {
       const val = e.target.value || '';
       if (!val) {
-        if (typeof formState.clearLooseItemCreator === 'function') {
-          formState.clearLooseItemCreator();
-        } else {
-          formState.looseItemCreatorName = '';
-        }
+        formState.clearLooseItemCreator();
+        renderSelectedLooseCreatorsChips();
         return;
       }
       const matched = currentBaseLooseItemCreators.find(
         c => c.looseItemCreatorName === val || c.looseItemCreatorCode === val
       );
-      if (matched && typeof formState.selectLooseItemCreator === 'function') {
-        formState.selectLooseItemCreator(matched);
+      if (matched) {
+        formState.addLooseItemCreator(matched);
       } else {
-        formState.looseItemCreatorName = val;
+        formState.addLooseItemCreator({ looseItemCreatorName: val });
       }
+      renderSelectedLooseCreatorsChips();
     };
     txtLooseItemCreator.addEventListener('change', onLooseCreatorChange);
     txtLooseItemCreator.addEventListener('input', onLooseCreatorChange);
   }
-  if (txtLooseItemStatus) txtLooseItemStatus.addEventListener('input', (e) => formState.looseItemStatus = e.target.value);
-  selTransportCategory.addEventListener('change', (e) => formState.transportCategory = e.target.value);
-  txtCarrierName.addEventListener('input', (e) => formState.carrierName = e.target.value);
-  txtDriverName.addEventListener('input', (e) => formState.driverName = e.target.value);
+
+  if (txtLooseItemStatus) {
+    txtLooseItemStatus.addEventListener('input', (e) => {
+      if (typeof formState.setLooseItemStatus === 'function') {
+        formState.setLooseItemStatus(e.target.value);
+      } else {
+        formState.looseItemStatus = e.target.value;
+      }
+    });
+  }
+  if (selTransportCategory) {
+    selTransportCategory.addEventListener('change', (e) => {
+      if (typeof formState.setTransportCategory === 'function') {
+        formState.setTransportCategory(e.target.value);
+      } else {
+        formState.transportCategory = e.target.value;
+      }
+    });
+  }
+  if (txtCarrierName) txtCarrierName.addEventListener('input', (e) => formState.carrierName = e.target.value);
+  if (txtDriverName) txtDriverName.addEventListener('input', (e) => formState.driverName = e.target.value);
+
+  function syncGuidanceCheckboxUI() {
+    if (!chkGuidanceConfirmed) return;
+    chkGuidanceConfirmed.checked = Boolean(formState.guidanceConfirmed);
+    const rowLabel = chkGuidanceConfirmed.closest('.guidance-check-row');
+    if (rowLabel) {
+      rowLabel.classList.toggle('is-checked', Boolean(formState.guidanceConfirmed));
+    }
+    if (guidanceCheckError && formState.guidanceConfirmed) {
+      guidanceCheckError.style.display = 'none';
+      guidanceCheckError.textContent = '';
+    }
+  }
+
+  var isOpeningRecordForEditing = false;
+  var lastSubmitBannerOrigin = '';
+
+  function resolveLoadingManager() {
+    if (typeof window !== 'undefined' && window.loadingManager) {
+      return window.loadingManager;
+    }
+    if (typeof LoadingComponent !== 'undefined' && LoadingComponent && LoadingComponent.loadingManager) {
+      return LoadingComponent.loadingManager;
+    }
+    return null;
+  }
+
+  function syncClientValidationBannerIfResolved() {
+    if (lastSubmitBannerOrigin !== 'client_validation') return;
+    const hasTopErr = Boolean(formState.errors && Object.keys(formState.errors).length > 0);
+    const hasDetErr = Boolean(formState.detailErrors && Object.keys(formState.detailErrors).length > 0);
+    const hasAttErr = Boolean(formState.attachmentErrors && Object.keys(formState.attachmentErrors).length > 0);
+    const sBanner = document.getElementById('submitResultBanner');
+    const sMsg = document.getElementById('submitResultMessage');
+    if (!hasTopErr && !hasDetErr && !hasAttErr) {
+      if (sBanner) sBanner.style.display = 'none';
+      lastSubmitBannerOrigin = '';
+    } else if (sMsg && formState.errors) {
+      if (formState.errors.guidanceConfirmed) {
+        sMsg.textContent = formState.errors.guidanceConfirmed;
+      } else if (formState.errors.errorDetails && !formState.errors.liftOperator && !formState.errors.totalMaterialTypeCount) {
+        sMsg.textContent = `入力内容に不備があります。${formState.errors.errorDetails}`;
+      }
+    }
+  }
+
+  if (chkGuidanceConfirmed) {
+    chkGuidanceConfirmed.addEventListener('change', (e) => {
+      formState.setGuidanceConfirmed(e.target.checked);
+      syncGuidanceCheckboxUI();
+      syncClientValidationBannerIfResolved();
+    });
+  }
+
+  function hideRevisionConflictBanner() {
+    if (revisionConflictBanner) {
+      revisionConflictBanner.style.display = 'none';
+    }
+    if (revisionConflictMessage) {
+      revisionConflictMessage.textContent = '';
+    }
+  }
+
+  function showRevisionConflictBanner(message) {
+    if (!revisionConflictBanner || !revisionConflictMessage) return;
+    revisionConflictMessage.textContent = message || '他の社員によって更新されました。最新の内容を読み込んでから再度保存してください。';
+    revisionConflictBanner.style.display = 'block';
+  }
+
+  function updateEditingModeBannerUI() {
+    const mode = formState.editingMode || 'NEW';
+    const btnSubmitEl = document.getElementById('btnSubmitCheck');
+    if (mode === 'NEW') {
+      if (recordViewHeading) recordViewHeading.textContent = '出荷チェック新規登録';
+      if (editingModeBanner) editingModeBanner.style.display = 'none';
+      if (btnSaveDraft) {
+        btnSaveDraft.style.display = '';
+        btnSaveDraft.textContent = '一時保存';
+      }
+      if (submitButtonsGrid) submitButtonsGrid.classList.remove('is-single-action');
+      if (btnSubmitEl && !isSubmittingShipmentWithAttachments) {
+        btnSubmitEl.textContent = '完了登録';
+      }
+      return;
+    }
+
+    const meta = formState.recordMetadata || {};
+    const creatorStr = meta.createdByName
+      ? `${meta.createdByName}${meta.createdByEmpNo ? ' (' + meta.createdByEmpNo + ')' : ''}`
+      : (meta.createdByEmpNo || '---');
+    const updaterStr = meta.updatedByName
+      ? `${meta.updatedByName}${meta.updatedByEmpNo ? ' (' + meta.updatedByEmpNo + ')' : ''}`
+      : (meta.updatedByEmpNo || '---');
+
+    if (editingModeBanner) {
+      editingModeBanner.style.display = 'flex';
+      editingModeBanner.classList.toggle('is-completed-edit', mode === 'EDIT_COMPLETED');
+    }
+    if (editingRevisionBadge) {
+      editingRevisionBadge.textContent = `Rev.${formState.expectedRevision || 1}`;
+      editingRevisionBadge.style.display = 'none';
+    }
+    if (editingModeDescription) {
+      editingModeDescription.textContent = `初回作成: ${creatorStr} ／ 最終更新: ${updaterStr}`;
+    }
+
+    if (mode === 'DRAFT') {
+      if (recordViewHeading) recordViewHeading.textContent = '出荷チェック入力再開（一時保存）';
+      if (editingModeBadge) {
+        editingModeBadge.className = 'badge-record-status is-draft';
+        editingModeBadge.textContent = '一時保存データを編集中';
+      }
+      if (editingReviewResetWarning) editingReviewResetWarning.style.display = 'none';
+      if (btnSaveDraft) {
+        btnSaveDraft.style.display = '';
+        btnSaveDraft.textContent = '一時保存を更新';
+      }
+      if (submitButtonsGrid) submitButtonsGrid.classList.remove('is-single-action');
+      if (btnSubmitEl && !isSubmittingShipmentWithAttachments) {
+        btnSubmitEl.textContent = '完了登録';
+      }
+    } else {
+      if (recordViewHeading) recordViewHeading.textContent = '出荷チェック実績の編集';
+      if (editingModeBadge) {
+        editingModeBadge.className = 'badge-record-status is-completed';
+        editingModeBadge.textContent = '完了登録済み実績を共同編集中';
+      }
+      const isReviewed = formState.originalReviewStatus === 'OK' || formState.originalReviewStatus === 'NG';
+      if (editingReviewResetWarning) {
+        editingReviewResetWarning.style.display = isReviewed ? 'block' : 'none';
+      }
+      if (btnSaveDraft) {
+        btnSaveDraft.style.display = 'none';
+      }
+      if (submitButtonsGrid) submitButtonsGrid.classList.add('is-single-action');
+      if (btnSubmitEl && !isSubmittingShipmentWithAttachments) {
+        btnSubmitEl.textContent = '変更を保存する';
+      }
+    }
+  }
+
+  function syncFormControlsFromState() {
+    if (txtLoadingDate) {
+      txtLoadingDate.value = formState.loadingDate || '';
+    }
+    if (numEquipmentTypeCount) {
+      numEquipmentTypeCount.value = (formState.totalMaterialTypeCount === null || formState.totalMaterialTypeCount === undefined)
+        ? ''
+        : String(formState.totalMaterialTypeCount);
+    }
+    if (radLooseYes && radLooseNo) {
+      if (formState.hasLooseItems === true) {
+        radLooseYes.checked = true;
+        radLooseNo.checked = false;
+      } else if (formState.hasLooseItems === false) {
+        radLooseYes.checked = false;
+        radLooseNo.checked = true;
+      } else {
+        radLooseYes.checked = false;
+        radLooseNo.checked = false;
+      }
+    }
+    updateLooseFieldsVisibility();
+    renderSelectedLooseCreatorsChips();
+    if (txtSearchLooseItemCreator) {
+      txtSearchLooseItemCreator.value = '';
+    }
+    closeLooseCreatorDropdown();
+
+    if (txtLooseItemStatus) {
+      txtLooseItemStatus.value = formState.looseItemStatus || '';
+    }
+    if (selTransportCategory) {
+      selTransportCategory.value = formState.transportCategory || '未指定';
+    }
+    if (txtCarrierName) {
+      txtCarrierName.value = formState.carrierName || '';
+    }
+    if (txtDriverName) {
+      txtDriverName.value = formState.driverName || '';
+    }
+    if (optionalAccordion && (formState.carrierName || formState.driverName || (formState.transportCategory && formState.transportCategory !== '未指定'))) {
+      optionalAccordion.classList.add('open');
+      if (accordionHeader) accordionHeader.setAttribute('aria-expanded', 'true');
+    }
+
+    syncGuidanceCheckboxUI();
+    updateLiftOperatorUI();
+    if (typeof renderErrorDetailCards === 'function') {
+      renderErrorDetailCards();
+    }
+    if (typeof renderAttachments === 'function') {
+      renderAttachments();
+    }
+    updateEditingModeBannerUI();
+  }
+
+  if (btnCancelEditingMode) {
+    btnCancelEditingMode.addEventListener('click', () => {
+      if (isSubmittingShipmentWithAttachments) return;
+      hideRevisionConflictBanner();
+      const sBanner = document.getElementById('submitResultBanner');
+      if (sBanner) sBanner.style.display = 'none';
+      formState.resetForm({ preserveLiftOperator: false, preserveEmployee: true });
+      const client = resolveActiveShipmentClient();
+      if (client && typeof client.startNewSubmission === 'function') {
+        client.startNewSubmission();
+      }
+      syncFormControlsFromState();
+    });
+  }
+
+  if (btnReloadLatestOnConflict) {
+    btnReloadLatestOnConflict.addEventListener('click', async () => {
+      if (isOpeningRecordForEditing || isSubmittingShipmentWithAttachments) return;
+      const targetId = formState.editingMode === 'DRAFT'
+        ? formState.draftId
+        : formState.editingShippingCheckId;
+      if (!targetId) return;
+      btnReloadLatestOnConflict.disabled = true;
+      const lm = resolveLoadingManager();
+      if (lm) {
+        lm.showProgressBar();
+        lm.showBlockingLoader(
+          '実績データを読み込み中...',
+          '保存済みの入力情報・添付情報を取得しています。しばらくお待ちください。'
+        );
+      }
+      try {
+        const client = resolveActiveShipmentClient();
+        const res = await client.getShipment(targetId);
+        const latestData = (res && res.payload) ? res.payload : res;
+        if (latestData) {
+          await openRecordForEditing(latestData, { preserveUnpersistedAttachments: true });
+          hideRevisionConflictBanner();
+          showSubmitBanner('warning', '最新の内容を読み込みました。内容を確認して再度保存してください。');
+        }
+      } catch (reloadErr) {
+        showSubmitBanner('error', (reloadErr && reloadErr.message) || '最新データの再読み込みに失敗しました。');
+      } finally {
+        if (lm) {
+          lm.hideBlockingLoader();
+          lm.hideProgressBar();
+        }
+        btnReloadLatestOnConflict.disabled = false;
+      }
+    });
+  }
 
   // Expose to window for automated testing
   window.__SHIPPING_ERROR_FORM_STATE__ = formState;
@@ -1316,16 +1757,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const errorDetailsContainer = document.getElementById('errorDetailsContainer');
   const btnAddErrorDetail = document.getElementById('btnAddErrorDetail');
 
-  // TASK-007: Attachment DOM Elements
+  // TASK-007: Attachment DOM Elements (Google Drive Photo & PDF Upload)
   const fileCapturePhoto = document.getElementById('fileCapturePhoto');
   const btnCapturePhoto = document.getElementById('btnCapturePhoto');
-  const txtPdfLink = document.getElementById('txtPdfLink');
-  const btnAddPdfLink = document.getElementById('btnAddPdfLink');
-  const pdfLinkError = document.getElementById('pdfLinkError');
+  const fileSelectPdf = document.getElementById('fileSelectPdf');
+  const btnSelectPdf = document.getElementById('btnSelectPdf');
+  const attachmentUploadStatus = document.getElementById('attachmentUploadStatus');
   const attachmentList = document.getElementById('attachmentList');
   const attachmentEmptyNotice = document.getElementById('attachmentEmptyNotice');
   const attachmentGlobalError = document.getElementById('attachmentGlobalError');
   const errorDetailsGlobalError = document.getElementById('errorDetailsGlobalError');
+
+  // Attachment Viewer Modal DOM Elements (STEP 5: Authenticated Detail Viewing)
+  const attachmentViewerModal = document.getElementById('attachmentViewerModal');
+  const attachmentViewerTitle = document.getElementById('attachmentViewerTitle');
+  const attachmentViewerBody = document.getElementById('attachmentViewerBody');
+  const btnAttachmentOpenTab = document.getElementById('btnAttachmentOpenTab');
+  const btnAttachmentDownload = document.getElementById('btnAttachmentDownload');
+  const btnCloseAttachmentViewer = document.getElementById('btnCloseAttachmentViewer');
+  const btnFooterCloseAttachmentViewer = document.getElementById('btnFooterCloseAttachmentViewer');
 
   const materialModal = document.getElementById('materialModal');
   const btnCloseMaterialModal = document.getElementById('btnCloseMaterialModal');
@@ -1336,6 +1786,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let activeDetailIdForMaterial = null;
   let cachedMaterials = null;
+
+  function syncErrorDetailValidationDOM() {
+    if (errorDetailsContainer) {
+      const cardNodes = errorDetailsContainer.querySelectorAll('.error-detail-card');
+      cardNodes.forEach((cardEl) => {
+        const detId = cardEl.dataset ? cardEl.dataset.detailId : '';
+        const ce = detId && formState.detailErrors ? formState.detailErrors[detId] : null;
+        const hasErr = Boolean(ce && Object.keys(ce).length > 0);
+        cardEl.classList.toggle('has-error', hasErr);
+      });
+    }
+    if (errorDetailsGlobalError) {
+      if (formState.errors && formState.errors.errorDetails) {
+        errorDetailsGlobalError.textContent = formState.errors.errorDetails;
+        errorDetailsGlobalError.style.display = 'block';
+      } else {
+        errorDetailsGlobalError.textContent = '';
+        errorDetailsGlobalError.style.display = 'none';
+      }
+    }
+    syncClientValidationBannerIfResolved();
+  }
 
   function renderErrorDetailCards() {
     if (!errorDetailsContainer) return;
@@ -1376,67 +1848,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         <label class="form-label">区分 <span class="required-asterisk">*</span></label>
         <div class="category-grid" role="radiogroup" aria-label="区分選択（明細 #${index + 1}）">
           ${window.CANONICAL_CATEGORIES.map(cat => {
-            const isSel = detail.category === cat;
-            return `<button type="button" class="category-btn ${isSel ? 'is-selected' : ''}" data-cat="${cat}" data-id="${detail.clientDetailId}" role="radio" aria-checked="${isSel}">${cat}</button>`;
-          }).join('')}
+        const isSel = detail.category === cat;
+        return `<button type="button" class="category-btn ${isSel ? 'is-selected' : ''}" data-cat="${cat}" data-id="${detail.clientDetailId}" role="radio" aria-checked="${isSel}">${cat}</button>`;
+      }).join('')}
         </div>
         <div class="form-error" style="${cardErrors.category ? 'display:block;' : ''}">${cardErrors.category || ''}</div>
       `;
       card.appendChild(catGroup);
 
-      // 2. Material Code Search Combobox (FRONTEND-001)
+      // 2. Material Name / Code Search Combobox (FRONTEND-001)
       const matGroup = document.createElement('div');
       matGroup.className = 'form-group';
       const comboboxMountId = `combobox_${detail.clientDetailId}`;
       matGroup.innerHTML = `
-        <label class="form-label">資材コード <span class="required-asterisk">*</span></label>
-        <div id="${comboboxMountId}"></div>
+        <label class="form-label">資材名 / 資材コード <span class="required-asterisk">*</span></label>
+        <div id="${comboboxMountId}" class="material-combobox-mount"></div>
+        <div class="form-hint" style="margin-top: 4px; font-size: 0.8rem; color: var(--color-text-muted);">※資材名の一部（例: 足場板・単管・クランプ）または資材コードを入力して候補から選択してください。</div>
         <div class="form-error" style="${cardErrors.material ? 'display:block;' : ''}">${cardErrors.material || ''}</div>
       `;
       card.appendChild(matGroup);
-
-      // Mount independent MaterialCombobox instance for this detail card
-      setTimeout(() => {
-        const mount = document.getElementById(comboboxMountId);
-        if (mount && typeof MaterialCombobox !== 'undefined') {
-          new MaterialCombobox({
-            container: mount,
-            rpcClient: window.shippingRpcClient || (typeof RpcClient !== 'undefined' ? new RpcClient() : null),
-            getSessionToken: () => {
-              return (typeof SessionClient !== 'undefined' && SessionClient.getToken)
-                ? SessionClient.getToken()
-                : (window.__CURRENT_SESSION_TOKEN__ || '');
-            },
-            initialValue: detail.materialCode ? {
-              materialCode: detail.materialCode,
-              materialName: detail.materialName,
-              matCode: detail.materialCode,
-              matName: detail.materialName
-            } : null,
-            onSelect: (mat) => {
-              formState.setMaterialForDetail(detail.clientDetailId, {
-                materialCode: mat.materialCode,
-                materialName: mat.materialName,
-                matCode: mat.materialCode,
-                matName: mat.materialName
-              });
-              if (formState.detailErrors[detail.clientDetailId]?.material) {
-                delete formState.detailErrors[detail.clientDetailId].material;
-                const errDiv = matGroup.querySelector('.form-error');
-                if (errDiv) errDiv.style.display = 'none';
-              }
-            },
-            onClear: () => {
-              formState.setMaterialForDetail(detail.clientDetailId, {
-                materialCode: '',
-                materialName: '',
-                matCode: '',
-                matName: ''
-              });
-            }
-          });
-        }
-      }, 0);
 
       // 3. Cause / Detail textarea
       const causeGroup = document.createElement('div');
@@ -1450,28 +1880,70 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
       card.appendChild(causeGroup);
 
-      // Wire Cause textarea input
+      // Wire Cause textarea input + IME compositionend + change
       const textarea = causeGroup.querySelector('textarea');
-      textarea.addEventListener('input', (e) => {
-        formState.updateErrorDetail(detail.clientDetailId, { causeDetail: e.target.value });
-        if (formState.detailErrors[detail.clientDetailId]?.causeDetail && e.target.value.trim()) {
-          delete formState.detailErrors[detail.clientDetailId].causeDetail;
-          const errDiv = causeGroup.querySelector('.form-error');
-          if (errDiv) errDiv.style.display = 'none';
+      const handleCauseChange = (e) => {
+        const nextVal = (e && e.target && typeof e.target.value === 'string') ? e.target.value : textarea.value;
+        formState.updateErrorDetail(detail.clientDetailId, { causeDetail: nextVal });
+        const errDiv = causeGroup.querySelector('.form-error');
+        if (errDiv && !formState.detailErrors[detail.clientDetailId]?.causeDetail) {
+          errDiv.textContent = '';
+          errDiv.style.display = 'none';
         }
-      });
+        syncErrorDetailValidationDOM();
+      };
+      textarea.addEventListener('input', handleCauseChange);
+      textarea.addEventListener('change', handleCauseChange);
+      textarea.addEventListener('compositionend', handleCauseChange);
 
       errorDetailsContainer.appendChild(card);
+
+      // Synchronously mount independent MaterialCombobox instance for this detail card
+      const mount = matGroup.querySelector('.material-combobox-mount') || document.getElementById(comboboxMountId);
+      if (mount && typeof MaterialCombobox !== 'undefined') {
+        new MaterialCombobox({
+          container: mount,
+          browseOnFocus: true,
+          rpcClient: window.shippingRpcClient || (typeof RpcClient !== 'undefined' ? new RpcClient() : null),
+          getSessionToken: () => {
+            return (typeof SessionClient !== 'undefined' && SessionClient.getToken)
+              ? SessionClient.getToken()
+              : (window.__CURRENT_SESSION_TOKEN__ || '');
+          },
+          initialValue: detail.materialCode ? {
+            materialCode: detail.materialCode,
+            materialName: detail.materialName,
+            matCode: detail.materialCode,
+            matName: detail.materialName
+          } : null,
+          onSelect: (mat) => {
+            formState.setMaterialForDetail(detail.clientDetailId, {
+              materialCode: mat.materialCode,
+              materialName: mat.materialName,
+              matCode: mat.materialCode,
+              matName: mat.materialName
+            });
+            const errDiv = matGroup.querySelector('.form-error');
+            if (errDiv && !formState.detailErrors[detail.clientDetailId]?.material) {
+              errDiv.textContent = '';
+              errDiv.style.display = 'none';
+            }
+            syncErrorDetailValidationDOM();
+          },
+          onClear: () => {
+            formState.setMaterialForDetail(detail.clientDetailId, {
+              materialCode: '',
+              materialName: '',
+              matCode: '',
+              matName: ''
+            });
+            syncErrorDetailValidationDOM();
+          }
+        });
+      }
     });
 
-    if (errorDetailsGlobalError) {
-      if (formState.errors.errorDetails) {
-        errorDetailsGlobalError.textContent = formState.errors.errorDetails;
-        errorDetailsGlobalError.style.display = 'block';
-      } else {
-        errorDetailsGlobalError.style.display = 'none';
-      }
-    }
+    syncErrorDetailValidationDOM();
   }
 
   function escapeHtml(str) {
@@ -1498,14 +1970,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      // 2. Category button
+      // 2. Category button (update in-place to preserve MaterialCombobox & textarea state across cards)
       const catBtn = e.target.closest('.category-btn');
       if (catBtn) {
         const detailId = catBtn.dataset.id;
         const cat = catBtn.dataset.cat;
         if (detailId && cat) {
           formState.updateErrorDetail(detailId, { category: cat });
-          renderErrorDetailCards();
+          const cardEl = catBtn.closest('.error-detail-card');
+          if (cardEl) {
+            const allCatBtns = cardEl.querySelectorAll('.category-btn');
+            allCatBtns.forEach((b) => {
+              const sel = b.dataset.cat === cat;
+              b.classList.toggle('is-selected', sel);
+              b.setAttribute('aria-checked', String(sel));
+            });
+            const catGroupEl = catBtn.closest('.form-group');
+            const catErrDiv = catGroupEl ? catGroupEl.querySelector('.form-error') : null;
+            if (catErrDiv && !formState.detailErrors[detailId]?.category) {
+              catErrDiv.textContent = '';
+              catErrDiv.style.display = 'none';
+            }
+            syncErrorDetailValidationDOM();
+          } else {
+            renderErrorDetailCards();
+          }
         }
         return;
       }
@@ -1630,14 +2119,226 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // =========================================================================
-  // TASK-007: Evidence Attachment UI Controller (Photo & PDF link)
+  // TASK-007: Evidence Attachment UI Controller (Google Drive Photo & PDF)
   // =========================================================================
+
+  let isSubmittingShipmentWithAttachments = false;
+  const detailAttachmentBlobCache = new Map(); // cacheKey -> { blobUrl, mimeType, originalFilename }
+
+  function resolveActiveShipmentClient() {
+    return shipmentClient || (typeof ShippingShipmentClient !== 'undefined' && rpcClient
+      ? ShippingShipmentClient.createShipmentClient({ rpcClient })
+      : (window.shippingClient || window.shipmentClient || null));
+  }
+
+  function clearDetailAttachmentBlobCache() {
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      detailAttachmentBlobCache.forEach((entry) => {
+        if (entry && entry.blobUrl) {
+          try { URL.revokeObjectURL(entry.blobUrl); } catch (e) { }
+        }
+      });
+    }
+    detailAttachmentBlobCache.clear();
+  }
 
   function formatFileSize(bytes) {
     if (typeof bytes !== 'number' || isNaN(bytes) || bytes <= 0) return '';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function setAttachmentStatusBanner(variant, message) {
+    if (!attachmentUploadStatus) return;
+    if (!message) {
+      attachmentUploadStatus.style.display = 'none';
+      attachmentUploadStatus.textContent = '';
+      attachmentUploadStatus.className = 'attachment-upload-banner';
+      return;
+    }
+    attachmentUploadStatus.textContent = message;
+    attachmentUploadStatus.className = 'attachment-upload-banner' +
+      (variant === 'error' ? ' is-error' : (variant === 'success' ? ' is-success' : ''));
+    attachmentUploadStatus.style.display = 'block';
+  }
+
+  function setAttachmentErrorText(message) {
+    if (!attachmentGlobalError) return;
+    if (!message) {
+      attachmentGlobalError.style.display = 'none';
+      attachmentGlobalError.textContent = '';
+      return;
+    }
+    attachmentGlobalError.textContent = message;
+    attachmentGlobalError.style.display = 'block';
+  }
+
+  function readFileAsBase64(fileObj) {
+    if (!fileObj) {
+      return Promise.reject(new Error('ファイルデータが見つかりません。'));
+    }
+    if (typeof fileObj._base64Data === 'string') {
+      return Promise.resolve(fileObj._base64Data);
+    }
+    if (typeof FileReader !== 'undefined') {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx !== -1 ? result.substring(commaIdx + 1) : result);
+        };
+        reader.onerror = () => reject(new Error('ファイルの読み取りに失敗しました。'));
+        reader.readAsDataURL(fileObj);
+      });
+    }
+    if (typeof fileObj.arrayBuffer === 'function') {
+      return fileObj.arrayBuffer().then((ab) => {
+        if (typeof Buffer !== 'undefined') {
+          return Buffer.from(ab).toString('base64');
+        }
+        const bytes = new Uint8Array(ab);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+      });
+    }
+    return Promise.reject(new Error('この環境ではファイルを読み取れません。'));
+  }
+
+  /**
+   * Compresses large smartphone photos (and converts iPhone HEIC/HEIF when supported by browser)
+   * to a legible JPEG (max 1920px, quality 0.82) to stay well within GAS execution/payload limits.
+   */
+  async function preparePhotoFileForAttachment(rawFile) {
+    if (!rawFile) {
+      throw new Error('画像ファイルが指定されていません。');
+    }
+    if (rawFile.size <= 0) {
+      throw new Error('0バイトの画像ファイルは添付できません。');
+    }
+    const maxRawBytes = (typeof ATTACHMENT_LIMITS !== 'undefined' && ATTACHMENT_LIMITS.MAX_RAW_PHOTO_BYTES)
+      ? ATTACHMENT_LIMITS.MAX_RAW_PHOTO_BYTES
+      : 20 * 1024 * 1024;
+    if (rawFile.size > maxRawBytes) {
+      throw new Error('画像ファイルが大きすぎます（20MB以下の写真を選択してください）。');
+    }
+
+    const rawName = String(rawFile.name || ('photo_' + Date.now() + '.jpg')).trim();
+    const rawMime = String(rawFile.type || '').trim().toLowerCase();
+    const isHeic = rawMime === 'image/heic' || rawMime === 'image/heif' || /\.(heic|heif)$/i.test(rawName);
+    const isStandardPhoto = rawMime === 'image/jpeg' || rawMime === 'image/png' || rawMime === 'image/webp' ||
+      (!rawMime && /\.(jpe?g|png|webp)$/i.test(rawName));
+
+    if (!isStandardPhoto && !isHeic) {
+      throw new Error('写真は JPEG・PNG・WebP 形式のみ添付できます。');
+    }
+
+    const shouldAttemptCanvas = isHeic || rawFile.size > 900 * 1024;
+    const canUseCanvas = typeof document !== 'undefined' &&
+      typeof Image !== 'undefined' &&
+      typeof URL !== 'undefined' &&
+      typeof URL.createObjectURL === 'function';
+
+    if (!shouldAttemptCanvas || !canUseCanvas) {
+      if (isHeic) {
+        throw new Error('HEIC形式の画像はこの環境で変換できません。JPEG・PNG・WebP画像またはPDFを選択してください。');
+      }
+      return { file: rawFile, originalFilename: rawName, mimeType: rawMime || 'image/jpeg', wasCompressed: false };
+    }
+
+    let tempObjUrl = '';
+    try {
+      tempObjUrl = URL.createObjectURL(rawFile);
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('IMAGE_DECODE_FAILED'));
+        el.src = tempObjUrl;
+      });
+
+      const origW = img.naturalWidth || img.width || 0;
+      const origH = img.naturalHeight || img.height || 0;
+      if (!origW || !origH) {
+        throw new Error('IMAGE_DECODE_FAILED');
+      }
+
+      const maxDim = 1920;
+      let targetW = origW;
+      let targetH = origH;
+      if (origW > maxDim || origH > maxDim) {
+        if (origW >= origH) {
+          targetW = maxDim;
+          targetH = Math.max(1, Math.round((origH * maxDim) / origW));
+        } else {
+          targetH = maxDim;
+          targetW = Math.max(1, Math.round((origW * maxDim) / origH));
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx || typeof canvas.toBlob !== 'function') {
+        if (isHeic) {
+          throw new Error('HEIC_UNSUPPORTED');
+        }
+        return { file: rawFile, originalFilename: rawName, mimeType: rawMime || 'image/jpeg', wasCompressed: false };
+      }
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, targetW, targetH);
+      ctx.drawImage(img, 0, 0, targetW, targetH);
+
+      const compressedBlob = await new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.82);
+      });
+
+      if (!compressedBlob || compressedBlob.size <= 0) {
+        if (isHeic) throw new Error('HEIC_UNSUPPORTED');
+        return { file: rawFile, originalFilename: rawName, mimeType: rawMime || 'image/jpeg', wasCompressed: false };
+      }
+
+      if (!isHeic && compressedBlob.size >= rawFile.size && rawFile.size <= 5 * 1024 * 1024) {
+        return { file: rawFile, originalFilename: rawName, mimeType: rawMime || 'image/jpeg', wasCompressed: false };
+      }
+
+      const baseStem = rawName.replace(/\.[^.]+$/, '') || ('photo_' + Date.now());
+      const jpgName = baseStem + '.jpg';
+      let finalFile = compressedBlob;
+      if (typeof File === 'function') {
+        try {
+          finalFile = new File([compressedBlob], jpgName, { type: 'image/jpeg', lastModified: Date.now() });
+        } catch (eFile) {
+          compressedBlob.name = jpgName;
+          finalFile = compressedBlob;
+        }
+      } else {
+        compressedBlob.name = jpgName;
+        finalFile = compressedBlob;
+      }
+
+      return {
+        file: finalFile,
+        originalFilename: jpgName,
+        mimeType: 'image/jpeg',
+        wasCompressed: true
+      };
+    } catch (convErr) {
+      if (isHeic) {
+        throw new Error('HEIC形式の画像はこのブラウザで変換できません。カメラ設定またはJPEG・PNG・PDFファイルをご利用ください。');
+      }
+      // Non-HEIC standard photo: fall back to original file if within 5MB limit
+      return { file: rawFile, originalFilename: rawName, mimeType: rawMime || 'image/jpeg', wasCompressed: false };
+    } finally {
+      if (tempObjUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        try { URL.revokeObjectURL(tempObjUrl); } catch (e) { }
+      }
+    }
   }
 
   function renderAttachments() {
@@ -1660,129 +2361,209 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const isPhoto = att.attachmentType === 'photo';
       const badgeClass = isPhoto ? 'photo' : 'pdf';
-      const badgeLabel = isPhoto ? '写真' : 'PDFリンク';
-      const displayName = att.originalFilename || att.storageLocation || '証跡ファイル';
-      
-      let thumbHtml = '';
-      let metaInfo = '';
+      const badgeLabel = isPhoto ? '写真' : 'PDF';
+      const displayName = att.originalFilename || (isPhoto ? '写真ファイル' : 'PDFファイル');
+      const sizeStr = formatFileSize(att.fileSize) || '---';
+      const mimeShort = isPhoto
+        ? String(att.mimeType || 'image/jpeg').replace('image/', '').toUpperCase()
+        : 'PDF';
 
-      if (isPhoto) {
-        const previewSrc = att.localPreviewUrl || '';
-        thumbHtml = '<div class="attachment-thumb-wrap">' +
-          (previewSrc
-            ? '<img src="' + escapeHtml(previewSrc) + '" alt="証跡写真プレビュー ' + (idx + 1) + '" class="attachment-thumb-img">'
-            : '<span class="attachment-thumb-icon" aria-hidden="true">[写真]</span>') +
-          '</div>';
-        const sizeStr = formatFileSize(att.fileSize);
-        metaInfo = (sizeStr ? sizeStr + ' | ' : '') + (att.createdAt || '');
-      } else {
-        thumbHtml = '<div class="attachment-thumb-wrap">' +
-          '<span class="attachment-thumb-icon" aria-hidden="true">[PDF]</span>' +
-          '</div>';
-        metaInfo = '参照: ' + escapeHtml(att.storageLocation) + (att.createdAt ? ' | ' + att.createdAt : '');
+      let statusClass = 'is-pending';
+      let statusLabel = '保存待機';
+      if (att.persisted === true || att.uploadState === 'persisted') {
+        statusClass = 'is-persisted';
+        statusLabel = 'Drive保存済';
+      } else if (att.uploadState === 'uploading') {
+        statusClass = 'is-uploading';
+        statusLabel = 'Drive保存中...';
+      } else if (att.uploadState === 'uploaded') {
+        statusClass = 'is-uploaded';
+        statusLabel = 'Drive一時保存済';
+      } else if (att.uploadState === 'error') {
+        statusClass = 'is-error';
+        statusLabel = '保存エラー';
       }
 
-      item.innerHTML = 
+      const canPreviewSaved = Boolean(att.persisted === true && att.shippingCheckId && att.attachmentId);
+      let thumbHtml = '';
+      if (isPhoto) {
+        const previewSrc = att.localPreviewUrl || '';
+        const lazyClass = (!previewSrc && canPreviewSaved) ? ' js-form-persisted-photo-thumb' : '';
+        const dataAttrs = canPreviewSaved
+          ? ` data-check-id="${escapeHtml(att.shippingCheckId)}" data-attachment-id="${escapeHtml(att.attachmentId)}" data-filename="${escapeHtml(displayName)}" data-mime="${escapeHtml(att.mimeType || 'image/jpeg')}" style="cursor:pointer;"`
+          : '';
+        thumbHtml = '<div class="attachment-thumb-wrap' + lazyClass + '"' + dataAttrs + '>' +
+          (previewSrc
+            ? '<img src="' + escapeHtml(previewSrc) + '" alt="証跡写真プレビュー ' + (idx + 1) + '" class="attachment-thumb-img">'
+            : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>') +
+          '</div>';
+      } else {
+        thumbHtml = '<div class="attachment-thumb-wrap" style="background: #FEF2F2; border-color: #FECACA;">' +
+          '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B91C1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+          '</div>';
+      }
+
+      const metaInfo = `${mimeShort} / ${sizeStr}` + (att.wasCompressed ? '（自動圧縮済）' : '');
+      const errDetailHtml = att.uploadError
+        ? '<div style="font-size: 0.76rem; color: #DC2626; font-weight: 600; margin-top: 2px;">' + escapeHtml(att.uploadError) + '</div>'
+        : '';
+
+      const viewSavedBtnHtml = canPreviewSaved
+        ? '<button type="button" class="btn btn-secondary btn-preview-persisted-attachment" style="min-height: 36px; padding: 4px 10px; font-size: 0.8rem; margin-right: 4px;" ' +
+        'data-check-id="' + escapeHtml(att.shippingCheckId) + '" ' +
+        'data-attachment-id="' + escapeHtml(att.attachmentId) + '" ' +
+        'data-attachment-type="' + escapeHtml(att.attachmentType) + '" ' +
+        'data-filename="' + escapeHtml(displayName) + '" ' +
+        'data-mime="' + escapeHtml(att.mimeType || '') + '">確認</button>'
+        : '';
+
+      item.innerHTML =
         thumbHtml +
         '<div class="attachment-info">' +
-          '<div class="attachment-header-row">' +
-            '<span class="attachment-type-badge ' + badgeClass + '">' + badgeLabel + '</span>' +
-            '<span class="attachment-filename" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</span>' +
-          '</div>' +
-          '<div class="attachment-meta" title="' + escapeHtml(metaInfo) + '">' + escapeHtml(metaInfo) + '</div>' +
+        '<div class="attachment-header-row">' +
+        '<span class="attachment-type-badge ' + badgeClass + '">' + badgeLabel + '</span>' +
+        '<span class="attachment-status-badge ' + statusClass + '">' + statusLabel + '</span>' +
+        '<span class="attachment-filename" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</span>' +
         '</div>' +
-        '<button type="button" class="btn-remove-attachment" data-attachment-id="' + escapeHtml(att.clientAttachmentId) + '" aria-label="' + escapeHtml(displayName) + ' を削除">' +
-          '削除' +
+        '<div class="attachment-meta" title="' + escapeHtml(metaInfo) + '">' + escapeHtml(metaInfo) + '</div>' +
+        errDetailHtml +
+        '</div>' +
+        viewSavedBtnHtml +
+        '<button type="button" class="btn-remove-attachment" ' + (isSubmittingShipmentWithAttachments ? 'disabled ' : '') +
+        'data-attachment-id="' + escapeHtml(att.clientAttachmentId) + '" aria-label="' + escapeHtml(displayName) + ' を取り消す">' +
+        '取消' +
         '</button>';
 
       attachmentList.appendChild(item);
     });
+
+    // Lazy-load Drive thumbnails for persisted photo attachments when editing
+    const persistedThumbs = attachmentList.querySelectorAll('.js-form-persisted-photo-thumb');
+    persistedThumbs.forEach(async (thumbEl) => {
+      const checkId = thumbEl.getAttribute('data-check-id') || '';
+      const attId = thumbEl.getAttribute('data-attachment-id') || '';
+      const fname = thumbEl.getAttribute('data-filename') || '写真';
+      const mime = thumbEl.getAttribute('data-mime') || 'image/jpeg';
+      if (!checkId || !attId || typeof fetchAuthorizedAttachmentBlobEntry !== 'function') return;
+      try {
+        const entry = await fetchAuthorizedAttachmentBlobEntry(checkId, attId, mime, fname);
+        if (!thumbEl.isConnected) return;
+        thumbEl.innerHTML = `<img src="${escapeHtml(entry.blobUrl)}" alt="${escapeHtml(fname)}" class="attachment-thumb-img">`;
+      } catch (eThumb) { }
+    });
   }
 
-  // Event Delegation for Attachment Removal
+  // Event Delegation for Attachment Preview & Pre-Save Cancellation
   if (attachmentList) {
     attachmentList.addEventListener('click', (e) => {
+      const previewBtn = e.target.closest('.btn-preview-persisted-attachment, .js-form-persisted-photo-thumb');
+      if (previewBtn && typeof openAttachmentViewer === 'function') {
+        const checkId = previewBtn.getAttribute('data-check-id') || '';
+        const attId = previewBtn.getAttribute('data-attachment-id') || '';
+        const attType = previewBtn.getAttribute('data-attachment-type') || 'photo';
+        const fname = previewBtn.getAttribute('data-filename') || '証跡プレビュー';
+        const mime = previewBtn.getAttribute('data-mime') || '';
+        if (checkId && attId) {
+          openAttachmentViewer({
+            shippingCheckId: checkId,
+            attachmentId: attId,
+            attachmentType: attType,
+            originalFilename: fname,
+            mimeType: mime
+          });
+          return;
+        }
+      }
+
+      if (isSubmittingShipmentWithAttachments) return;
       const removeBtn = e.target.closest('.btn-remove-attachment');
       if (removeBtn) {
         const attId = removeBtn.getAttribute('data-attachment-id');
         if (attId) {
-          formState.removeAttachment(attId);
+          const removed = formState.removeAttachment(attId);
+          // Discard staged uncommitted Drive file immediately; persisted files are cleaned up ONLY on save/update commit
+          if (removed && !removed.persisted && removed.stagedUpload && removed.stagedUpload.driveFileId) {
+            const client = resolveActiveShipmentClient();
+            if (client && typeof client.discardStagedAttachment === 'function') {
+              client.discardStagedAttachment(removed.stagedUpload).catch(() => { });
+            }
+          }
+          setAttachmentErrorText('');
+          if (!formState.attachments || formState.attachments.length === 0) {
+            setAttachmentStatusBanner('', '');
+          }
           renderAttachments();
         }
       }
     });
   }
 
-  // Smartphone Photo Capture & Selection
+  // 1. Photo Capture & Selection (Smartphone Camera / Library & PC Image Picker)
   if (btnCapturePhoto && fileCapturePhoto) {
     btnCapturePhoto.addEventListener('click', () => {
-      if (attachmentGlobalError) {
-        attachmentGlobalError.style.display = 'none';
-        attachmentGlobalError.textContent = '';
-      }
+      if (isSubmittingShipmentWithAttachments) return;
+      setAttachmentErrorText('');
       fileCapturePhoto.click();
     });
 
-    fileCapturePhoto.addEventListener('change', (e) => {
-      const files = e.target.files;
-      if (!files || files.length === 0) return;
+    fileCapturePhoto.addEventListener('change', async (e) => {
+      const files = e.target.files ? Array.from(e.target.files) : [];
+      fileCapturePhoto.value = '';
+      if (files.length === 0) return;
 
-      if (attachmentGlobalError) {
-        attachmentGlobalError.style.display = 'none';
-        attachmentGlobalError.textContent = '';
+      setAttachmentErrorText('');
+      const errors = [];
+      if (files.length > 0) {
+        setAttachmentStatusBanner('info', '写真ファイルを読み込み中...');
       }
 
-      let hasError = false;
       for (let i = 0; i < files.length; i++) {
         try {
-          formState.addPhotoAttachment(files[i]);
+          const prepared = await preparePhotoFileForAttachment(files[i]);
+          formState.addPhotoAttachment(prepared.file, {
+            originalFilename: prepared.originalFilename,
+            mimeType: prepared.mimeType,
+            wasCompressed: prepared.wasCompressed
+          });
         } catch (err) {
-          hasError = true;
-          if (attachmentGlobalError) {
-            attachmentGlobalError.textContent = err.message;
-            attachmentGlobalError.style.display = 'block';
-          }
+          errors.push(err && err.message ? err.message : '写真の追加に失敗しました。');
         }
       }
 
-      // Reset file input so identical file can be re-selected if removed and added again
-      fileCapturePhoto.value = '';
+      setAttachmentStatusBanner('', '');
+      if (errors.length > 0) {
+        setAttachmentErrorText(errors.join(' / '));
+      }
       renderAttachments();
     });
   }
 
-  // Office-PC PDF Link Registration
-  function handleAddPdfLink() {
-    if (!txtPdfLink) return;
-    const linkVal = txtPdfLink.value;
+  // 2. Direct PDF File Selection (PC & Smartphone Files Picker)
+  if (btnSelectPdf && fileSelectPdf) {
+    btnSelectPdf.addEventListener('click', () => {
+      if (isSubmittingShipmentWithAttachments) return;
+      setAttachmentErrorText('');
+      fileSelectPdf.click();
+    });
 
-    if (pdfLinkError) {
-      pdfLinkError.style.display = 'none';
-      pdfLinkError.textContent = '';
-    }
+    fileSelectPdf.addEventListener('change', (e) => {
+      const files = e.target.files ? Array.from(e.target.files) : [];
+      fileSelectPdf.value = '';
+      if (files.length === 0) return;
 
-    try {
-      formState.addPdfLinkAttachment(linkVal);
-      txtPdfLink.value = '';
+      setAttachmentErrorText('');
+      const errors = [];
+      for (let i = 0; i < files.length; i++) {
+        try {
+          formState.addPdfAttachment(files[i]);
+        } catch (err) {
+          errors.push(err && err.message ? err.message : 'PDFファイルの追加に失敗しました。');
+        }
+      }
+      if (errors.length > 0) {
+        setAttachmentErrorText(errors.join(' / '));
+      }
       renderAttachments();
-    } catch (err) {
-      if (pdfLinkError) {
-        pdfLinkError.textContent = err.message;
-        pdfLinkError.style.display = 'block';
-      }
-    }
-  }
-
-  if (btnAddPdfLink) {
-    btnAddPdfLink.addEventListener('click', handleAddPdfLink);
-  }
-
-  if (txtPdfLink) {
-    txtPdfLink.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleAddPdfLink();
-      }
     });
   }
 
@@ -1791,6 +2572,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (formState && typeof formState.cleanupAttachments === 'function') {
       formState.cleanupAttachments();
     }
+    clearDetailAttachmentBlobCache();
   });
 
   // Initial render of detail cards & attachments on load
@@ -1804,8 +2586,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   const submitResultBanner = document.getElementById('submitResultBanner');
   const submitResultMessage = document.getElementById('submitResultMessage');
 
-  function showSubmitBanner(type, message) {
+  function ensureSubmitResultActionsEl() {
+    if (!submitResultBanner) return null;
+    let actEl = document.getElementById('submitResultActions');
+    if (!actEl) {
+      actEl = document.createElement('div');
+      actEl.id = 'submitResultActions';
+      actEl.style.display = 'none';
+      actEl.style.marginTop = '10px';
+      actEl.style.gap = '8px';
+      actEl.style.flexWrap = 'wrap';
+      submitResultBanner.appendChild(actEl);
+    }
+    return actEl;
+  }
+
+  function clearSubmitResultActions() {
+    const actEl = document.getElementById('submitResultActions');
+    if (actEl) {
+      actEl.innerHTML = '';
+      actEl.style.display = 'none';
+    }
+  }
+
+  function showSubmitBanner(type, message, origin = 'server_result') {
     if (!submitResultBanner || !submitResultMessage) return;
+    lastSubmitBannerOrigin = origin;
+    clearSubmitResultActions();
     submitResultBanner.style.display = 'block';
     submitResultMessage.textContent = message; // CODEX-013-005 / NEW-014B-001: Safe textContent to prevent DOM XSS
     if (type === 'success') {
@@ -1821,6 +2628,399 @@ document.addEventListener('DOMContentLoaded', async () => {
       submitResultBanner.style.color = '#991B1B';
       submitResultBanner.style.border = '1px solid #FECACA';
     }
+  }
+
+  let draftToastHideTimer = null;
+
+  function scrollPageToTop() {
+    try {
+      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      }
+    } catch (e) {
+      try {
+        if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+          window.scrollTo(0, 0);
+        }
+      } catch (e2) {}
+    }
+    if (typeof document !== 'undefined') {
+      if (document.documentElement) document.documentElement.scrollTop = 0;
+      if (document.body) document.body.scrollTop = 0;
+      const mainEl = document.getElementById('mainContent');
+      if (mainEl) mainEl.scrollTop = 0;
+    }
+  }
+
+  function showDraftSavedToast(titleText, subText) {
+    if (typeof document === 'undefined') return;
+    const toastEl = document.getElementById('draftSavedToast');
+    const titleEl = document.getElementById('draftSavedToastTitle');
+    const subEl = document.getElementById('draftSavedToastSub');
+    if (titleEl) titleEl.textContent = titleText || '一時保存しました';
+    if (subEl) subEl.textContent = subText || '後から続きを入力できます。';
+    if (!toastEl) return;
+    if (draftToastHideTimer) {
+      clearTimeout(draftToastHideTimer);
+      draftToastHideTimer = null;
+    }
+    toastEl.style.display = 'flex';
+    draftToastHideTimer = setTimeout(() => {
+      if (toastEl) toastEl.style.display = 'none';
+      draftToastHideTimer = null;
+    }, 3800);
+  }
+
+  function setSaveCompletionBackgroundLocked(locked) {
+    if (typeof document === 'undefined') return;
+    const targets = [
+      document.querySelector ? document.querySelector('.app-header') : null,
+      document.getElementById('mainContent')
+    ];
+    targets.forEach((el) => {
+      if (!el) return;
+      if (locked) {
+        el.inert = true;
+        if (typeof el.setAttribute === 'function') el.setAttribute('aria-hidden', 'true');
+      } else {
+        el.inert = false;
+        if (typeof el.removeAttribute === 'function') el.removeAttribute('aria-hidden');
+      }
+    });
+    if (document.body && document.body.style) {
+      document.body.style.overflow = locked ? 'hidden' : '';
+    }
+  }
+
+  function closeSaveCompletionModal(options = {}) {
+    if (typeof document === 'undefined') return;
+    const modalEl = document.getElementById('saveCompletionModal');
+    if (modalEl) {
+      modalEl.classList.remove('open');
+      modalEl.style.display = 'none';
+    }
+    setSaveCompletionBackgroundLocked(false);
+
+    if (options && options.navigateToList === true) {
+      scrollPageToTop();
+      if (typeof switchView === 'function') {
+        switchView('list');
+      }
+      if (typeof loadShipmentCheckList === 'function') {
+        loadShipmentCheckList(1, true);
+      }
+      return;
+    }
+
+    const focusTarget = document.getElementById('txtLoadingDate') || document.getElementById('btnNavRecord');
+    if (focusTarget && typeof focusTarget.focus === 'function') {
+      try { focusTarget.focus({ preventScroll: true }); } catch (e) {}
+    }
+  }
+
+  function openSaveCompletionModal(mode) {
+    if (typeof document === 'undefined') return;
+    const isEdit = mode === 'EDIT_COMPLETED';
+    const titleStr = isEdit ? '変更を保存しました' : '登録が完了しました';
+    const descStr = '入力内容は正常に保存されました。';
+
+    scrollPageToTop();
+
+    if (submitResultBanner) {
+      submitResultBanner.style.display = 'none';
+    }
+    clearSubmitResultActions();
+
+    const modalEl = document.getElementById('saveCompletionModal');
+    const titleEl = document.getElementById('saveCompletionTitle');
+    const descEl = document.getElementById('saveCompletionDesc');
+    if (titleEl) titleEl.textContent = titleStr;
+    if (descEl) descEl.textContent = descStr;
+
+    if (!modalEl) {
+      showSubmitBanner('success', `${titleStr}。${descStr}`);
+      return;
+    }
+
+    setSaveCompletionBackgroundLocked(true);
+    modalEl.style.display = 'flex';
+    modalEl.classList.add('open');
+
+    const primaryBtn = document.getElementById('btnSaveCompletionGoList');
+    if (primaryBtn && typeof primaryBtn.focus === 'function') {
+      try { primaryBtn.focus({ preventScroll: true }); } catch (e) {}
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.closeSaveCompletionModal = closeSaveCompletionModal;
+    window.openSaveCompletionModal = openSaveCompletionModal;
+  }
+
+  (function bindSaveCompletionModalEvents() {
+    if (typeof document === 'undefined') return;
+    const modalEl = document.getElementById('saveCompletionModal');
+    const btnGoList = document.getElementById('btnSaveCompletionGoList');
+    const btnCloseBottom = document.getElementById('btnSaveCompletionClose');
+    const btnCloseTop = document.getElementById('btnCloseSaveCompletion');
+
+    if (btnGoList) {
+      btnGoList.addEventListener('click', () => {
+        closeSaveCompletionModal({ navigateToList: true });
+      });
+    }
+    if (btnCloseBottom) {
+      btnCloseBottom.addEventListener('click', () => {
+        closeSaveCompletionModal({ navigateToList: false });
+      });
+    }
+    if (btnCloseTop) {
+      btnCloseTop.addEventListener('click', () => {
+        closeSaveCompletionModal({ navigateToList: false });
+      });
+    }
+    if (modalEl) {
+      modalEl.addEventListener('click', (e) => {
+        if (e.target === modalEl) {
+          closeSaveCompletionModal({ navigateToList: false });
+        }
+      });
+      modalEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab') return;
+        const focusables = [btnCloseTop, btnGoList, btnCloseBottom].filter(Boolean);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      });
+    }
+  })();
+
+  /**
+   * Read-only state verification when a mutation response is lost or times out.
+   * NEVER re-sends or mutates any server record.
+   */
+  async function verifyMutationOutcomeReadOnly(client, mutationCtx) {
+    if (!client || !mutationCtx) {
+      return { status: 'UNKNOWN', aggregate: null };
+    }
+    const subRef = String(mutationCtx.submittedOpRef || '').trim();
+    const targetId = String(mutationCtx.targetId || '').trim();
+
+    try {
+      if (targetId && typeof client.getShipment === 'function') {
+        const getRes = await client.getShipment(targetId);
+        if (!getRes || getRes.ok === false) {
+          return { status: 'UNKNOWN', aggregate: null };
+        }
+        const agg = getRes.payload || getRes.data || getRes;
+        if (!agg || typeof agg !== 'object') {
+          return { status: 'UNKNOWN', aggregate: null };
+        }
+        if (agg.recoveryRequired === true || agg.recoveryStatus === 'RECOVERY_REQUIRED') {
+          return { status: 'QUARANTINED', aggregate: agg };
+        }
+        const hist = Array.isArray(agg.editHistory) ? agg.editHistory : [];
+        const matchedHist = subRef
+          ? hist.some((h) => h && h.changeSummary && h.changeSummary.opRef === subRef)
+          : false;
+        const scParent = agg.shipmentCheck || {};
+        const matchedParentSub = Boolean(
+          subRef && (
+            scParent.clientSubmissionId === subRef ||
+            agg.clientSubmissionId === subRef
+          )
+        );
+        if (matchedHist || (mutationCtx.mode === 'PROMOTE_DRAFT' && agg.recordStatus === 'COMPLETED' && matchedParentSub)) {
+          return {
+            status: 'SAVED_CONFIRMED',
+            revision: Number(agg.revision || (agg.governance && agg.governance.revision)) || 1,
+            recordId: String(scParent.shippingCheckId || agg.shippingCheckId || agg.draftId || targetId),
+            aggregate: agg
+          };
+        }
+        return {
+          status: 'NOT_CONFIRMED',
+          currentRevision: Number(agg.revision || (agg.governance && agg.governance.revision)) || 1,
+          recordStatus: agg.recordStatus || '',
+          aggregate: agg
+        };
+      }
+
+      if (subRef && typeof client.listShipments === 'function') {
+        const listRes = await client.listShipments({ includeDrafts: true, baseScope: 'BASE', page: 1, limit: 30 });
+        if (listRes && listRes.ok !== false) {
+          const payloadObj = listRes.payload || listRes.data || listRes;
+          const items = Array.isArray(payloadObj)
+            ? payloadObj
+            : (Array.isArray(payloadObj && payloadObj.shipments)
+              ? payloadObj.shipments
+              : (Array.isArray(payloadObj && payloadObj.items) ? payloadObj.items : []));
+          const foundItem = items.find((it) => it && it.clientSubmissionId === subRef);
+          if (foundItem) {
+            const foundId = String(foundItem.shippingCheckId || foundItem.draftId || '').trim();
+            if (foundId && typeof client.getShipment === 'function') {
+              const detailRes = await client.getShipment(foundId);
+              const fullAgg = (detailRes && detailRes.payload) ? detailRes.payload : detailRes;
+              if (fullAgg && detailRes.ok !== false) {
+                return {
+                  status: 'SAVED_CONFIRMED',
+                  revision: Number(fullAgg.revision) || 1,
+                  recordId: foundId,
+                  aggregate: fullAgg
+                };
+              }
+            }
+            return {
+              status: 'SAVED_CONFIRMED',
+              revision: Number(foundItem.revision) || 1,
+              recordId: foundId || '---',
+              aggregate: foundItem
+            };
+          }
+        }
+      }
+    } catch (verifyErr) {
+      return { status: 'UNKNOWN', aggregate: null };
+    }
+    return { status: 'UNKNOWN', aggregate: null };
+  }
+
+  function applyVerifiedSavedOutcome(client, mutationCtx, reconcile) {
+    try {
+      if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+        shipmentCache.invalidateMutations();
+      }
+    } catch (cacheErr) { }
+
+    if (client && typeof client.startNewSubmission === 'function') {
+      client.startNewSubmission();
+    }
+    if (rpcClient && rpcClient.mutationBlocked === true) {
+      rpcClient.mutationBlocked = false;
+    }
+
+    setAttachmentStatusBanner('', '');
+    setAttachmentErrorText('');
+
+    if (mutationCtx.mode === 'SAVE_DRAFT') {
+      if (reconcile && reconcile.aggregate) {
+        formState.hydrateFromAggregate(reconcile.aggregate);
+        syncFormControlsFromState();
+      }
+      showSubmitBanner(
+        'warning',
+        '通信応答がタイムアウトしましたが、最新状態を再取得して照合した結果、サーバー側で一時保存が完了していることを確認しました。二重登録防止のため再送は不要です。',
+        'server_result'
+      );
+      return;
+    }
+
+    try {
+      if (typeof formState.resetForm === 'function') {
+        formState.resetForm({ preserveLiftOperator: false, preserveEmployee: true });
+      } else if (typeof formState.reset === 'function') {
+        formState.reset({ preserveLiftOperator: false, preserveEmployee: true });
+      }
+      syncFormControlsFromState();
+    } catch (resetErr) { }
+
+    showSubmitBanner(
+      'warning',
+      '通信応答がタイムアウトしましたが、最新実績を再取得して照合した結果、サーバー側で変更が保存済みであることを確認しました。二重登録防止のため再送は不要です。',
+      'server_result'
+    );
+  }
+
+  function renderTimeoutVerificationBanner(client, mutationCtx, initialReconcile) {
+    if (initialReconcile && initialReconcile.status === 'QUARANTINED') {
+      try {
+        if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+          shipmentCache.invalidateMutations();
+        }
+      } catch (cacheErr) { }
+      showSubmitBanner(
+        'error',
+        'データ確認が必要です：サーバー側で更新処理が中断された可能性があるため、安全保護中です。再送せず実績一覧を確認してください。',
+        'timeout_uncertain'
+      );
+      return;
+    }
+
+    let timeoutGuidance = 'サーバー通信がタイムアウトしました（応答未達のため保存完了とは確定していません）。二重登録を防ぐため自動再送は行っていません。「最新の保存状態を確認する」または「実績一覧を確認する」で最新状態をご確認ください。';
+    if (initialReconcile && initialReconcile.status === 'NOT_CONFIRMED') {
+      timeoutGuidance = 'サーバー通信がタイムアウトしました。現時点ではサーバーへの保存完了が確認されていないため、保存成功とは扱っていません。二重登録を防ぐため自動再送は行っていません。数秒後に「最新の保存状態を確認する」を押すか、「実績一覧を確認する」から最新状態をご確認ください。';
+    }
+
+    showSubmitBanner('error', timeoutGuidance, 'timeout_uncertain');
+
+    const actEl = ensureSubmitResultActionsEl();
+    if (!actEl) return;
+
+    actEl.innerHTML = '';
+    actEl.style.display = 'flex';
+
+    const btnVerify = document.createElement('button');
+    btnVerify.type = 'button';
+    btnVerify.id = 'btnVerifyTimeoutOutcome';
+    btnVerify.className = 'btn btn-secondary';
+    btnVerify.style.minHeight = '44px';
+    btnVerify.style.fontWeight = '700';
+    btnVerify.textContent = '最新の保存状態を確認する（再送なし）';
+
+    const btnGoList = document.createElement('button');
+    btnGoList.type = 'button';
+    btnGoList.id = 'btnGoListAfterTimeout';
+    btnGoList.className = 'btn btn-secondary';
+    btnGoList.style.minHeight = '44px';
+    btnGoList.textContent = '実績一覧を確認する';
+
+    btnVerify.addEventListener('click', async () => {
+      if (btnVerify.disabled) return;
+      btnVerify.disabled = true;
+      const lm = resolveLoadingManager();
+      if (lm) {
+        lm.showProgressBar();
+        lm.showBlockingLoader(
+          '最新の保存状態を確認しています...',
+          '再送は行わず、サーバー側の最新レコード状態のみを照合しています。'
+        );
+      }
+      try {
+        const nextRec = await verifyMutationOutcomeReadOnly(client, mutationCtx);
+        if (nextRec && nextRec.status === 'SAVED_CONFIRMED') {
+          applyVerifiedSavedOutcome(client, mutationCtx, nextRec);
+        } else {
+          renderTimeoutVerificationBanner(client, mutationCtx, nextRec);
+        }
+      } finally {
+        if (lm) {
+          lm.hideBlockingLoader();
+          lm.hideProgressBar();
+        }
+        if (btnVerify.isConnected) {
+          btnVerify.disabled = false;
+        }
+      }
+    });
+
+    btnGoList.addEventListener('click', () => {
+      if (typeof switchView === 'function') {
+        switchView('list');
+      }
+      if (typeof loadShipmentCheckList === 'function') {
+        loadShipmentCheckList(1, true);
+      }
+    });
+
+    actEl.appendChild(btnVerify);
+    actEl.appendChild(btnGoList);
   }
   function renderValidationErrors() {
     if (formState && formState.errors) {
@@ -1848,52 +3048,413 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         if (errorDetailsGlobalError) errorDetailsGlobalError.style.display = 'none';
       }
+      if (formState.errors.guidanceConfirmed) {
+        if (guidanceCheckError) {
+          guidanceCheckError.textContent = formState.errors.guidanceConfirmed;
+          guidanceCheckError.style.display = 'block';
+        }
+      } else {
+        if (guidanceCheckError) guidanceCheckError.style.display = 'none';
+      }
     }
+  }
+
+  /**
+   * Uploads only newly added local attachments (skipping persisted Drive attachments)
+   * prior to draft save, completion, or completed-record update.
+   */
+  async function uploadPendingAttachmentsToDrive(client, progressBtn) {
+    const activeSubId = typeof client.getCurrentSubmissionId === 'function'
+      ? client.getCurrentSubmissionId()
+      : '';
+    const allAtts = Array.isArray(formState.attachments) ? formState.attachments : [];
+    const pendingExists = allAtts.some(a => !a.persisted);
+    if (!pendingExists) {
+      return true;
+    }
+
+    if (typeof client.uploadAttachment !== 'function') {
+      throw new Error('証跡アップロードクライアントが利用できません。ページを再読み込みしてください。');
+    }
+
+    for (let i = 0; i < allAtts.length; i++) {
+      const att = allAtts[i];
+      if (att.persisted === true) {
+        continue; // Already persisted in Google Drive; never re-upload
+      }
+      const alreadyUploadedForThisSub =
+        att.uploadState === 'uploaded' &&
+        att.stagedUpload &&
+        att.stagedUpload.driveFileId &&
+        att.stagedUpload.uploadSignature &&
+        (!activeSubId || att.stagedUpload.clientSubmissionId === activeSubId);
+
+      if (alreadyUploadedForThisSub) {
+        continue;
+      }
+
+      const progressText = `証跡をGoogle Driveへ保存中 (${i + 1}/${allAtts.length}): ${att.originalFilename}`;
+      if (progressBtn) {
+        progressBtn.textContent = `証跡保存中 (${i + 1}/${allAtts.length})...`;
+      }
+      const uploadLm = resolveLoadingManager();
+      if (uploadLm && typeof uploadLm.updateBlockingLoaderMessage === 'function') {
+        uploadLm.updateBlockingLoaderMessage(
+          '証跡ファイルを保存しています...',
+          `Google Driveへ証跡を保存中です (${i + 1}/${allAtts.length})。そのままお待ちください。`
+        );
+      }
+      setAttachmentStatusBanner('info', progressText);
+      formState.markAttachmentUploading(att.clientAttachmentId);
+      renderAttachments();
+
+      try {
+        const base64Data = await readFileAsBase64(att.fileObject);
+        const staged = await client.uploadAttachment({
+          clientAttachmentId: att.clientAttachmentId,
+          attachmentType: att.attachmentType,
+          originalFilename: att.originalFilename,
+          mimeType: att.mimeType,
+          fileSize: att.fileSize,
+          base64Data
+        });
+        formState.markAttachmentUploaded(att.clientAttachmentId, staged);
+        renderAttachments();
+      } catch (uploadErr) {
+        const upReason = (uploadErr && uploadErr.message && !uploadErr.message.includes('fetch'))
+          ? uploadErr.message
+          : '証跡ファイルのアップロード中に通信エラーが発生しました。';
+        formState.markAttachmentUploadError(att.clientAttachmentId, upReason);
+        renderAttachments();
+        setAttachmentStatusBanner(
+          'error',
+          `証跡「${att.originalFilename}」の保存に失敗しました。通信状況を確認して再度ボタンを押すか、該当ファイルを取り消してください。`
+        );
+        showSubmitBanner(
+          'error',
+          `証跡ファイル「${att.originalFilename}」のアップロードに失敗したため中断しました（${upReason}）。再試行できます。`
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function isServerStagedAttachmentCleaned(errOrRes) {
+    if (!errOrRes || typeof errOrRes !== 'object') return false;
+    if (errOrRes.stagedAttachmentsCleaned === true) return true;
+    if (errOrRes.error && errOrRes.error.stagedAttachmentsCleaned === true) return true;
+    if (errOrRes.details && typeof errOrRes.details === 'object') {
+      if (errOrRes.details.stagedAttachmentsCleaned === true) return true;
+      if (errOrRes.details.error && errOrRes.details.error.stagedAttachmentsCleaned === true) return true;
+      if (errOrRes.details.raw && typeof errOrRes.details.raw === 'object') {
+        if (errOrRes.details.raw.stagedAttachmentsCleaned === true) return true;
+        if (errOrRes.details.raw.error && errOrRes.details.raw.error.stagedAttachmentsCleaned === true) return true;
+      }
+    }
+    return false;
+  }
+
+  // Server-Persisted Draft Save Handler (一時保存)
+  if (btnSaveDraft) {
+    btnSaveDraft.addEventListener('click', async () => {
+      if (isSubmittingShipmentWithAttachments) {
+        showSubmitBanner('warning', '現在保存処理中です。しばらくお待ちください。');
+        return;
+      }
+      if (submitResultBanner) submitResultBanner.style.display = 'none';
+      clearSubmitResultActions();
+      hideRevisionConflictBanner();
+      setAttachmentErrorText('');
+
+      isSubmittingShipmentWithAttachments = true;
+      renderAttachments();
+      if (btnCapturePhoto) btnCapturePhoto.disabled = true;
+      if (btnSelectPdf) btnSelectPdf.disabled = true;
+      if (btnSubmitCheck) btnSubmitCheck.disabled = true;
+      if (btnCancelEditingMode) btnCancelEditingMode.disabled = true;
+      btnSaveDraft.disabled = true;
+      btnSaveDraft.setAttribute('aria-busy', 'true');
+      btnSaveDraft.textContent = '一時保存しています...';
+
+      const saveLm = resolveLoadingManager();
+      if (saveLm) {
+        saveLm.showProgressBar();
+        saveLm.showBlockingLoader(
+          '一時保存しています...',
+          '入力内容と添付情報をサーバーへ保存しています。二重登録防止のためそのままお待ちください。'
+        );
+      }
+      let slowDraftTimer = setTimeout(() => {
+        if (!isSubmittingShipmentWithAttachments) return;
+        const activeLm = resolveLoadingManager();
+        if (activeLm && typeof activeLm.updateBlockingLoaderMessage === 'function') {
+          activeLm.updateBlockingLoaderMessage(
+            '一時保存しています...',
+            'Google Sheetsへ書き込み中です。二重登録防止のため再送せずそのままお待ちください。'
+          );
+        }
+      }, 6000);
+
+      let activeClient = null;
+      let draftMutationCtx = null;
+
+      try {
+        const client = resolveActiveShipmentClient();
+        activeClient = client;
+        if (!client || typeof client.saveDraft !== 'function') {
+          throw new Error('一時保存クライアントが利用できません。ページを再読み込みしてください。');
+        }
+
+        const uploadedOk = await uploadPendingAttachmentsToDrive(client, btnSaveDraft);
+        if (!uploadedOk) {
+          return;
+        }
+
+        btnSaveDraft.textContent = '一時保存しています...';
+        if (saveLm && typeof saveLm.updateBlockingLoaderMessage === 'function') {
+          saveLm.updateBlockingLoaderMessage(
+            '一時保存しています...',
+            '入力内容と添付情報をサーバーへ保存しています。二重登録防止のためそのままお待ちください。'
+          );
+        }
+        if (formState.editingMode === 'NEW' && txtLoadingDate && txtLoadingDate.value) {
+          formState.setLoadingDate(txtLoadingDate.value);
+        }
+        const draftPayload = formState.getDraftSavePayload();
+        const submittedOpRef = (typeof client.getCurrentSubmissionId === 'function' && client.getCurrentSubmissionId()) || '';
+        draftMutationCtx = {
+          mode: 'SAVE_DRAFT',
+          targetId: formState.editingMode === 'DRAFT' ? formState.draftId : null,
+          expectedPrevRev: Number(formState.expectedRevision) || 0,
+          submittedOpRef: submittedOpRef
+        };
+
+        const res = await client.saveDraft(draftPayload);
+        if (res && res.ok) {
+          const resData = res.payload || res.data || {};
+          try {
+            if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+              shipmentCache.invalidateMutations();
+            }
+          } catch (cacheErr) { }
+
+          formState.hydrateFromAggregate(resData);
+          syncFormControlsFromState();
+          setAttachmentStatusBanner('', '');
+          setAttachmentErrorText('');
+
+          showSubmitBanner(
+            'success',
+            '一時保存しました。後から続きを入力できます。'
+          );
+          showDraftSavedToast('一時保存しました', '後から続きを入力できます。');
+        } else {
+          if (isServerStagedAttachmentCleaned(res) && typeof formState.clearStagedUploads === 'function') {
+            formState.clearStagedUploads();
+          }
+          setAttachmentStatusBanner('', '');
+          const errCode = res && res.error && res.error.code;
+          const errMsg = (res && res.error && res.error.message) || '一時保存中にエラーが発生しました。';
+          if (
+            errCode === 'RECORD_RECOVERY_REQUIRED' ||
+            errCode === 'TRANSACTION_STATE_UNCERTAIN' ||
+            errCode === 'QUARANTINE_UNLOCK_FAILED'
+          ) {
+            try {
+              if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+                shipmentCache.invalidateMutations();
+              }
+            } catch (cacheErr) { }
+            showSubmitBanner('error', errMsg.includes('データ確認が必要です') ? errMsg : `データ確認が必要です：${errMsg}`);
+          } else if (errCode === 'ERR_REVISION_CONFLICT') {
+            showRevisionConflictBanner(errMsg);
+          } else {
+            showSubmitBanner('error', errMsg);
+          }
+        }
+      } catch (err) {
+        const cleanedOnServer = isServerStagedAttachmentCleaned(err);
+        if (cleanedOnServer && typeof formState.clearStagedUploads === 'function') {
+          formState.clearStagedUploads();
+        }
+        setAttachmentStatusBanner('', '');
+        const code = (err && err.code) || '';
+
+        if (code === 'CLIENT_TIMEOUT' || code === 'NETWORK_TIMEOUT' || code === 'TRANSPORT_UNCERTAIN') {
+          if (slowDraftTimer) {
+            clearTimeout(slowDraftTimer);
+            slowDraftTimer = null;
+          }
+          if (saveLm && typeof saveLm.updateBlockingLoaderMessage === 'function') {
+            saveLm.updateBlockingLoaderMessage(
+              'サーバーの保存状態を確認しています...',
+              '再送は行わず、サーバー側の最新状態を照合しています。'
+            );
+          }
+          const rec = activeClient && draftMutationCtx
+            ? await verifyMutationOutcomeReadOnly(activeClient, draftMutationCtx)
+            : { status: 'UNKNOWN', aggregate: null };
+          if (rec && rec.status === 'SAVED_CONFIRMED') {
+            applyVerifiedSavedOutcome(activeClient, draftMutationCtx, rec);
+          } else {
+            renderTimeoutVerificationBanner(activeClient, draftMutationCtx || { mode: 'SAVE_DRAFT' }, rec);
+          }
+          return;
+        }
+
+        const errMsg = (err && err.message && !err.message.includes('fetch'))
+          ? err.message
+          : '一時保存中に通信エラーが発生しました。';
+        if (
+          code === 'RECORD_RECOVERY_REQUIRED' ||
+          code === 'TRANSACTION_STATE_UNCERTAIN' ||
+          code === 'QUARANTINE_UNLOCK_FAILED'
+        ) {
+          try {
+            if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+              shipmentCache.invalidateMutations();
+            }
+          } catch (cacheErr) { }
+          showSubmitBanner('error', errMsg.includes('データ確認が必要です') ? errMsg : `データ確認が必要です：${errMsg}`);
+        } else if (code === 'ERR_REVISION_CONFLICT') {
+          showRevisionConflictBanner(errMsg);
+        } else {
+          showSubmitBanner('error', errMsg);
+        }
+      } finally {
+        if (slowDraftTimer) {
+          clearTimeout(slowDraftTimer);
+          slowDraftTimer = null;
+        }
+        if (saveLm) {
+          saveLm.hideBlockingLoader();
+          saveLm.hideProgressBar();
+        }
+        isSubmittingShipmentWithAttachments = false;
+        if (btnCapturePhoto) btnCapturePhoto.disabled = false;
+        if (btnSelectPdf) btnSelectPdf.disabled = false;
+        if (btnSubmitCheck) btnSubmitCheck.disabled = false;
+        if (btnCancelEditingMode) btnCancelEditingMode.disabled = false;
+        btnSaveDraft.disabled = false;
+        btnSaveDraft.removeAttribute('aria-busy');
+        updateEditingModeBannerUI();
+        renderAttachments();
+      }
+    });
   }
 
   if (btnSubmitCheck) {
     btnSubmitCheck.addEventListener('click', async () => {
+      if (isSubmittingShipmentWithAttachments) {
+        showSubmitBanner('warning', '現在保存処理中です。しばらくお待ちください。');
+        return;
+      }
       if (submitResultBanner) submitResultBanner.style.display = 'none';
+      clearSubmitResultActions();
+      hideRevisionConflictBanner();
+      setAttachmentErrorText('');
 
-      // 1. Client validation
+      // 1. Client validation (requires LiftOperator, ErrorDetails, AND GuidanceConfirmation)
       const isValid = formState.validate({
         requireLiftOperator: true,
-        requireErrorDetails: true
+        requireErrorDetails: true,
+        requireGuidanceConfirmed: true
       });
 
       if (!isValid) {
         renderValidationErrors();
         renderErrorDetailCards();
-        showSubmitBanner('error', '入力内容に不備があります。エラー項目を確認してください。');
+        let valBannerMsg = '入力内容に不備があります。エラー項目を確認してください。';
+        if (formState.errors.guidanceConfirmed) {
+          valBannerMsg = formState.errors.guidanceConfirmed;
+        } else if (formState.errors.errorDetails && !formState.errors.liftOperator && !formState.errors.totalMaterialTypeCount) {
+          valBannerMsg = `入力内容に不備があります。${formState.errors.errorDetails}`;
+        }
+        showSubmitBanner('error', valBannerMsg, 'client_validation');
         return;
       }
 
-      // 2. Gather draft payload
-      const payload = formState.getDraftPayload();
+      // 2. Coordinated Staged Drive Upload + Aggregate Completion / Update
+      const isEditingCompleted = formState.editingMode === 'EDIT_COMPLETED' && Boolean(formState.editingShippingCheckId);
+      const primaryProgressTitle = isEditingCompleted ? '変更を保存しています...' : '完了登録しています...';
+      isSubmittingShipmentWithAttachments = true;
+      renderAttachments();
+      if (btnCapturePhoto) btnCapturePhoto.disabled = true;
+      if (btnSelectPdf) btnSelectPdf.disabled = true;
+      if (btnSaveDraft) btnSaveDraft.disabled = true;
+      if (btnCancelEditingMode) btnCancelEditingMode.disabled = true;
 
-      // 3. API Submission via canonical GAS RPC Client
+      const submitLm = resolveLoadingManager();
+      if (submitLm) {
+        submitLm.showProgressBar();
+        submitLm.showBlockingLoader(
+          primaryProgressTitle,
+          '入力内容と添付情報をサーバーへ保存しています。二重登録防止のためそのままお待ちください。'
+        );
+      }
+      let slowSaveTimer = setTimeout(() => {
+        if (!isSubmittingShipmentWithAttachments) return;
+        const activeLm = resolveLoadingManager();
+        if (activeLm && typeof activeLm.updateBlockingLoaderMessage === 'function') {
+          activeLm.updateBlockingLoaderMessage(
+            primaryProgressTitle,
+            'Google Sheetsへ書き込み・整合性確認を行っています。二重登録防止のため再送せずそのままお待ちください。'
+          );
+        }
+      }, 6000);
+
+      let activeClient = null;
+      let submitMutationCtx = null;
+
       try {
         btnSubmitCheck.disabled = true;
-        btnSubmitCheck.textContent = '登録中...';
+        btnSubmitCheck.setAttribute('aria-busy', 'true');
+        btnSubmitCheck.textContent = primaryProgressTitle;
 
-        const client = shipmentClient || (typeof ShippingShipmentClient !== 'undefined' && rpcClient
-          ? ShippingShipmentClient.createShipmentClient({ rpcClient })
-          : (window.shippingClient || window.shipmentClient));
-
-        if (!client || typeof client.createShipment !== 'function') {
+        const client = resolveActiveShipmentClient();
+        activeClient = client;
+        if (!client || (typeof client.completeShipment !== 'function' && typeof client.createShipment !== 'function')) {
           throw new Error('RPCクライアントが利用できません。ページを再読み込みしてください。');
         }
 
-        const res = await client.createShipment(payload);
-        if (res && res.ok) {
-          // 1. GAS成功応答 & 2. 点検IDの取得
-          const resData = res.payload || res.data || {};
-          const shipmentCheck = resData.shipmentCheck || resData;
-          const checkId = shipmentCheck.shippingCheckId || '---';
-          const regAt = shipmentCheck.registeredAt || new Date().toLocaleString('ja-JP');
-          const isRetry = Boolean(resData.idempotentReplay || resData.isNew === false);
+        // Phase A: Upload newly added attachments to private Google Drive folder (persisted attachments are skipped)
+        const uploadedOk = await uploadPendingAttachmentsToDrive(client, btnSubmitCheck);
+        if (!uploadedOk) {
+          return;
+        }
 
-          // 3. 登録確定 & 4. 関連キャッシュの先行無効化 (CACHE-005)
+        // Phase B: Gather finalized payload and commit (completeShipment / updateShipment / fallback createShipment)
+        btnSubmitCheck.textContent = primaryProgressTitle;
+        if (submitLm && typeof submitLm.updateBlockingLoaderMessage === 'function') {
+          submitLm.updateBlockingLoaderMessage(
+            primaryProgressTitle,
+            '入力内容と添付情報をサーバーへ保存しています。二重登録防止のためそのままお待ちください。'
+          );
+        }
+        const payload = formState.getDraftPayload();
+        const submittedOpRef = (typeof client.getCurrentSubmissionId === 'function' && client.getCurrentSubmissionId())
+          || payload.clientSubmissionId
+          || '';
+        submitMutationCtx = {
+          mode: isEditingCompleted ? 'EDIT_COMPLETED' : (formState.editingMode === 'DRAFT' ? 'PROMOTE_DRAFT' : 'COMPLETE_NEW'),
+          targetId: isEditingCompleted
+            ? formState.editingShippingCheckId
+            : (formState.editingMode === 'DRAFT' ? formState.draftId : null),
+          expectedPrevRev: Number(formState.expectedRevision) || 1,
+          submittedOpRef: submittedOpRef
+        };
+
+        const res = isEditingCompleted
+          ? await client.updateShipment(formState.editingShippingCheckId, payload)
+          : (typeof client.completeShipment === 'function'
+            ? await client.completeShipment(payload)
+            : await client.createShipment(payload));
+
+        if (res && res.ok) {
+          const resData = res.payload || res.data || {};
+          const isIdempotentReplay = Boolean(resData.idempotentReplay || resData.isNew === false);
+
           try {
             if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
               shipmentCache.invalidateMutations();
@@ -1902,56 +3463,139 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.warn('Cache invalidation notice:', cacheErr);
           }
 
-          // 5. 成功通知を最優先で表示
-          const msg = isRetry
-            ? `【登録済み】同一のリクエストにより既に登録されています。<br>点検ID: <strong>${escapeHtml(checkId)}</strong><br>登録日時: ${escapeHtml(regAt)}`
-            : `【登録完了】出荷チェック実績が正常に登録されました。<br>点検ID: <strong>${escapeHtml(checkId)}</strong><br>登録日時: ${escapeHtml(regAt)}`;
-          showSubmitBanner('success', msg);
+          setAttachmentStatusBanner('', '');
+          setAttachmentErrorText('');
 
-          // 6. フォームを安全に初期化（個別try/catchで保護し、UIエラーが成功表示を壊さないようにする）
           try {
             if (typeof formState.resetForm === 'function') {
               formState.resetForm({ preserveLiftOperator: false, preserveEmployee: true });
             } else if (typeof formState.reset === 'function') {
               formState.reset({ preserveLiftOperator: false, preserveEmployee: true });
             }
-            if (typeof renderErrorDetailCards === 'function') {
-              renderErrorDetailCards();
-            }
-            if (typeof updateLiftOperatorUI === 'function') {
-              updateLiftOperatorUI();
-            }
-            const inputLoadingDate = document.getElementById('txtLoadingDate');
-            if (inputLoadingDate && formState.loadingDate) {
-              inputLoadingDate.value = formState.loadingDate;
-            }
+            syncFormControlsFromState();
           } catch (resetErr) {
             console.warn('Form reset non-critical notice:', resetErr);
           }
+
+          const msg = isEditingCompleted
+            ? '変更を保存しました。入力内容は正常に保存されました。'
+            : (isIdempotentReplay
+              ? '登録が完了しました。入力内容は正常に保存されました。'
+              : '登録が完了しました。入力内容は正常に保存されました。');
+          if (document.getElementById('saveCompletionModal')) {
+            openSaveCompletionModal(isEditingCompleted ? 'EDIT_COMPLETED' : 'NEW_COMPLETED');
+          } else {
+            showSubmitBanner('success', msg);
+          }
         } else {
+          if (res && res.error && res.error.stagedAttachmentsCleaned === true) {
+            formState.clearStagedUploads();
+            renderAttachments();
+          }
+          setAttachmentStatusBanner('', '');
+          const errCode = res && res.error && res.error.code;
           const errMsg = (res && res.error && res.error.message) || '登録処理中にエラーが発生しました。';
-          showSubmitBanner('error', errMsg);
+          if (
+            errCode === 'RECORD_RECOVERY_REQUIRED' ||
+            errCode === 'TRANSACTION_STATE_UNCERTAIN' ||
+            errCode === 'QUARANTINE_UNLOCK_FAILED'
+          ) {
+            try {
+              if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+                shipmentCache.invalidateMutations();
+              }
+            } catch (cacheErr) { }
+            showSubmitBanner('error', errMsg.includes('データ確認が必要です') ? errMsg : `データ確認が必要です：${errMsg}`);
+          } else if (errCode === 'ERR_REVISION_CONFLICT') {
+            showRevisionConflictBanner(errMsg);
+          } else {
+            showSubmitBanner('error', errMsg);
+          }
         }
       } catch (err) {
+        const cleanedOnServer = Boolean(
+          err && (
+            err.stagedAttachmentsCleaned === true ||
+            (err.details && err.details.raw && err.details.raw.stagedAttachmentsCleaned === true) ||
+            err.code === 'INVALID_ATTACHMENT_SIGNATURE' ||
+            err.code === 'STAGED_ATTACHMENT_MISSING'
+          )
+        );
+        if (cleanedOnServer && typeof formState.clearStagedUploads === 'function') {
+          formState.clearStagedUploads();
+        }
+        setAttachmentStatusBanner('', '');
+
+        const code = (err && err.code) || '';
+        if (code === 'ERR_REVISION_CONFLICT') {
+          showRevisionConflictBanner(err.message || '他の社員によって更新されました。最新の内容を読み込んでください。');
+          return;
+        }
+        if (code === 'CLIENT_TIMEOUT' || code === 'NETWORK_TIMEOUT' || code === 'TRANSPORT_UNCERTAIN') {
+          if (slowSaveTimer) {
+            clearTimeout(slowSaveTimer);
+            slowSaveTimer = null;
+          }
+          if (submitLm && typeof submitLm.updateBlockingLoaderMessage === 'function') {
+            submitLm.updateBlockingLoaderMessage(
+              'サーバーの保存状態を確認しています...',
+              '再送は行わず、サーバー側の最新レコード状態を照合しています。'
+            );
+          }
+          const rec = activeClient && submitMutationCtx
+            ? await verifyMutationOutcomeReadOnly(activeClient, submitMutationCtx)
+            : { status: 'UNKNOWN', aggregate: null };
+          if (rec && rec.status === 'SAVED_CONFIRMED') {
+            applyVerifiedSavedOutcome(activeClient, submitMutationCtx, rec);
+          } else {
+            renderTimeoutVerificationBanner(activeClient, submitMutationCtx || { mode: 'EDIT_COMPLETED' }, rec);
+          }
+          return;
+        }
+
         let errMsg = 'サーバーとの通信に失敗しました。接続環境を確認してください。';
-        const code = err.code || '';
-        if (code === 'UNAUTHENTICATED' || code === 'AUTH_EXPIRED') {
+        if (
+          code === 'RECORD_RECOVERY_REQUIRED' ||
+          code === 'TRANSACTION_STATE_UNCERTAIN' ||
+          code === 'QUARANTINE_UNLOCK_FAILED'
+        ) {
+          try {
+            if (typeof shipmentCache !== 'undefined' && shipmentCache.invalidateMutations) {
+              shipmentCache.invalidateMutations();
+            }
+          } catch (cacheErr) { }
+          const rawRecMsg = (err && err.message && !err.message.includes('fetch'))
+            ? err.message
+            : '前回の更新処理が中断されたため保護隔離中です。管理者に連絡してください。';
+          errMsg = rawRecMsg.includes('データ確認が必要です') ? rawRecMsg : `データ確認が必要です：${rawRecMsg}`;
+        } else if (code === 'UNAUTHENTICATED' || code === 'AUTH_EXPIRED') {
           errMsg = '認証セッションの有効期限が切れました。再度ログインしてください。';
-        } else if (code === 'ACCESS_DENIED') {
-          errMsg = '出荷チェックを登録する権限がありません。';
-        } else if (code === 'CLIENT_TIMEOUT' || code === 'NETWORK_TIMEOUT') {
-          errMsg = 'サーバー通信がタイムアウトしました。二重登録を防ぐため、再送せず実績一覧を確認してください。';
+        } else if (code === 'ACCESS_DENIED' || code === 'CROSS_BASE_EDIT_DENIED' || code === 'CROSS_BASE_ACCESS_DENIED') {
+          errMsg = (err && err.message) || 'このデータを登録・編集する権限がありません。';
         } else if (code === 'SUBMISSION_IN_PROGRESS') {
-          errMsg = '現在登録処理中です。しばらくお待ちください。';
-        } else if (code === 'TRANSPORT_UNCERTAIN') {
-          errMsg = '直前の通信状態が不確定です。二重登録を防止するため、画面を再読み込みして実績一覧を確認してください。';
-        } else if (err.message && !err.message.includes('fetch')) {
+          errMsg = '現在保存処理中です。しばらくお待ちください。';
+        } else if (err && err.message && !err.message.includes('fetch')) {
           errMsg = err.message;
         }
         showSubmitBanner('error', errMsg);
       } finally {
+        if (slowSaveTimer) {
+          clearTimeout(slowSaveTimer);
+          slowSaveTimer = null;
+        }
+        if (submitLm) {
+          submitLm.hideBlockingLoader();
+          submitLm.hideProgressBar();
+        }
+        isSubmittingShipmentWithAttachments = false;
+        if (btnCapturePhoto) btnCapturePhoto.disabled = false;
+        if (btnSelectPdf) btnSelectPdf.disabled = false;
+        if (btnSaveDraft) btnSaveDraft.disabled = false;
+        if (btnCancelEditingMode) btnCancelEditingMode.disabled = false;
         btnSubmitCheck.disabled = false;
-        btnSubmitCheck.textContent = '出荷チェックを登録する';
+        btnSubmitCheck.removeAttribute('aria-busy');
+        updateEditingModeBannerUI();
+        renderAttachments();
       }
     });
   }
@@ -2691,6 +4335,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (viewAnalyticsSection) viewAnalyticsSection.style.display = viewName === 'analytics' ? 'block' : 'none';
     if (viewSettingsSection) viewSettingsSection.style.display = viewName === 'settings' ? 'block' : 'none';
 
+    if (viewName === 'record') {
+      ensureNewRecordDefaultLoadingDate();
+    }
+
     if (bypassAuth) {
       return;
     }
@@ -2803,9 +4451,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (typeof updateEmployeeUI === 'function') updateEmployeeUI();
-    if (typeof updateLiftOperatorUI === 'function') updateLiftOperatorUI();
-    if (typeof renderErrorDetailCards === 'function') renderErrorDetailCards();
-    if (typeof renderAttachments === 'function') renderAttachments();
+    if (typeof syncFormControlsFromState === 'function') {
+      syncFormControlsFromState();
+    } else {
+      if (typeof updateLiftOperatorUI === 'function') updateLiftOperatorUI();
+      if (typeof renderErrorDetailCards === 'function') renderErrorDetailCards();
+      if (typeof renderAttachments === 'function') renderAttachments();
+    }
+    if (typeof hideRevisionConflictBanner === 'function') hideRevisionConflictBanner();
 
     // 3. Reset List view filter state and DOM (Finding P2)
     currentListPage = 1;
@@ -2827,6 +4480,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (inputEndDateList) inputEndDateList.value = '';
     const selListBaseScope = document.getElementById('selListBaseScope');
     if (selListBaseScope) selListBaseScope.value = 'BASE';
+    const selListRecordStatus = document.getElementById('selListRecordStatus');
+    if (selListRecordStatus) selListRecordStatus.value = 'ALL';
 
     // 4. Reset Review view filter state and DOM (Finding P2)
     const inputMonthReview = document.getElementById('inputMonthReview');
@@ -2847,7 +4502,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       selReviewArea.value = '全国';
     }
 
-    // 5. Close Detail Modal and purge detail body & actions (Finding P2)
+    // 5. Close Detail & Attachment Viewer Modals and purge detail body & blob cache
+    if (typeof closeAttachmentViewerModal === 'function') {
+      closeAttachmentViewerModal();
+    }
+    clearDetailAttachmentBlobCache();
+    setAttachmentStatusBanner('', '');
+    setAttachmentErrorText('');
     if (typeof closeDetailModal === 'function') {
       closeDetailModal();
     } else if (detailModal) {
@@ -2881,9 +4542,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const lblReviewTotalCount = document.getElementById('lblReviewTotalCount');
     if (lblReviewTotalCount) lblReviewTotalCount.textContent = '0';
 
-    // 7. Clear Master Client session cache
+    // 7. Clear Master Client, Shipment List, and Material Search session caches
     if (window.masterClient && typeof window.masterClient.clearCache === 'function') {
       window.masterClient.clearCache();
+    }
+    if (typeof shipmentCache !== 'undefined' && typeof shipmentCache.invalidateAll === 'function') {
+      shipmentCache.invalidateAll();
+    }
+    if (typeof MaterialCombobox !== 'undefined' && typeof MaterialCombobox.clearSharedCache === 'function') {
+      MaterialCombobox.clearSharedCache();
     }
   }
 
@@ -2968,12 +4635,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (ctx && ctx.empNo) {
-          await applyAccessContext(ctx);
+          currentAccessContext = ctx;
+          window.__CURRENT_ACCESS_CONTEXT__ = ctx;
           hideLoginModal();
           if (typeof closeEmployeeModal === 'function') {
             closeEmployeeModal();
           }
           switchView('record');
+          await applyAccessContext(ctx);
         } else {
           throw new Error('Access context resolution failed');
         }
@@ -3023,7 +4692,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error('TIMEOUT')), 3000)
           );
-          await Promise.race([logoutPromise, timeoutPromise]).catch(() => {});
+          await Promise.race([logoutPromise, timeoutPromise]).catch(() => { });
         }
       } finally {
         if (authClient && typeof authClient.clearSavedEmployeeCode === 'function') {
@@ -3051,7 +4720,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               updateEmployeeUI();
             }
           }
-        } catch (e) {}
+        } catch (e) { }
         if (headerUserName) headerUserName.textContent = '';
         if (btnHeaderLogout) btnHeaderLogout.style.display = 'none';
         btnHeaderSwitchUser.style.display = 'none';
@@ -3064,7 +4733,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateNavScrollHint();
         try {
           resetViewsForLogout();
-        } catch (e) {}
+        } catch (e) { }
         isSwitchingUser = false;
         if (txtLoginEmpNo) {
           txtLoginEmpNo.value = '';
@@ -3174,8 +4843,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Helper: Review Status Badge
-  function getReviewBadgeHtml(status) {
+  // Helper: Review / Record Status Badge
+  function getReviewBadgeHtml(status, recordStatus) {
+    if (recordStatus === 'DRAFT' || status === '一時保存') {
+      return '<span class="badge-review review-draft">一時保存</span>';
+    }
     const s = status || '未確認';
     let cls = 'review-unconfirmed';
     if (s === 'OK') cls = 'review-ok';
@@ -3185,6 +4857,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function formatDisplayDate(dateVal) {
     if (!dateVal) return '---';
+    if (formState && typeof formState.normalizeLoadingDate === 'function') {
+      const normalized = formState.normalizeLoadingDate(dateVal);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+        return normalized.replace(/-/g, '/');
+      }
+    }
     if (typeof dateVal === 'string') {
       const trimmed = dateVal.trim();
       if (/^\d{4}[-/]\d{2}[-/]\d{2}$/.test(trimmed)) {
@@ -3194,9 +4872,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
           const d = new Date(trimmed);
           if (!isNaN(d.getTime())) {
-            const yr = d.getFullYear();
-            const mo = String(d.getMonth() + 1).padStart(2, '0');
-            const da = String(d.getDate()).padStart(2, '0');
+            const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+            const yr = jst.getUTCFullYear();
+            const mo = String(jst.getUTCMonth() + 1).padStart(2, '0');
+            const da = String(jst.getUTCDate()).padStart(2, '0');
             return `${yr}/${mo}/${da}`;
           }
         } catch {
@@ -3239,11 +4918,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const selListBaseScope = document.getElementById('selListBaseScope');
     const selectedScope = selListBaseScope ? selListBaseScope.value : (isAreaManager ? 'ALL' : 'BASE');
     const effectiveBaseCode = (selectedScope === 'BASE' && userBaseCode) ? userBaseCode : undefined;
+    const selListRecordStatus = document.getElementById('selListRecordStatus');
+    const selectedRecordStatus = selListRecordStatus ? selListRecordStatus.value : 'ALL';
 
     const cacheScope = {
       action: 'shipment.list',
       empNo: userEmpNo,
+      callerBaseCode: userBaseCode || '',
       baseCode: effectiveBaseCode || 'ALL',
+      recordStatus: selectedRecordStatus,
+      includeDrafts: selectedRecordStatus !== 'COMPLETED',
       month: currentListCustomRange ? '' : currentListMonth,
       startDate: currentListCustomRange ? currentListCustomRange.startDate : '',
       endDate: currentListCustomRange ? currentListCustomRange.endDate : '',
@@ -3252,7 +4936,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     const cacheKey = (typeof shipmentCache !== 'undefined')
       ? shipmentCache.buildKey(cacheScope)
-      : `shipment.list:${userEmpNo}:${effectiveBaseCode || 'ALL'}:${currentListMonth}:${page}`;
+      : `shipment.list:${userEmpNo}:${effectiveBaseCode || 'ALL'}:${selectedRecordStatus}:${currentListMonth}:${page}`;
 
     const isCached = !bypassCache && typeof shipmentCache !== 'undefined' && shipmentCache.has(cacheKey);
 
@@ -3299,7 +4983,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           month: currentListCustomRange ? undefined : currentListMonth,
           startDate: currentListCustomRange ? currentListCustomRange.startDate : undefined,
           endDate: currentListCustomRange ? currentListCustomRange.endDate : undefined,
-          baseCode: effectiveBaseCode
+          baseCode: effectiveBaseCode,
+          recordStatus: selectedRecordStatus,
+          includeDrafts: selectedRecordStatus !== 'COMPLETED'
         };
         if (shipmentClient && typeof shipmentClient.listShipments === 'function') {
           return await shipmentClient.listShipments(serverOptions);
@@ -3443,6 +5129,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       loadShipmentCheckList(1, false);
     });
   }
+  const selListRecordStatusEl = document.getElementById('selListRecordStatus');
+  if (selListRecordStatusEl) {
+    selListRecordStatusEl.addEventListener('change', () => {
+      loadShipmentCheckList(1, false);
+    });
+  }
 
   if (btnPrevPage) {
     btnPrevPage.addEventListener('click', () => {
@@ -3460,33 +5152,51 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!tblShipmentChecksBody || !cardListContainer) return;
 
     items.forEach((item) => {
-      const checkId = item.shippingCheckId;
-      const rawDate = item.loadingDate || (item.inputStartedAt ? item.inputStartedAt.slice(0, 10) : '---');
-      const loadingDate = formatDisplayDate(rawDate);
+      const checkId = item.shippingCheckId || item.draftId;
+      const isDraft = item.recordStatus === 'DRAFT' || item.reviewStatus === '一時保存';
+      const rawDate = item.loadingDate || (isDraft ? '' : (item.inputStartedAt ? item.inputStartedAt.slice(0, 10) : '---'));
+      const loadingDate = rawDate ? formatDisplayDate(rawDate) : '積込日未入力';
       const baseName = item.historicalBaseName || item.HistoricalBaseName || item.baseName || item.BaseName || '---';
-      const empName = item.employeeName || item.EmployeeName || item.empName || '---';
-      const liftName = item.liftOperatorName || item.LiftOperatorName || '---';
-      const partnerName = item.partnerName || item.PartnerName || '---';
+      const empName = item.updatedByName || item.employeeName || item.EmployeeName || item.empName || '---';
+      const liftName = item.liftOperatorName || item.LiftOperatorName || (isDraft ? '未選択' : '---');
+      const partnerName = item.partnerName || item.PartnerName || (isDraft ? '未選択' : '---');
       const errCount = (typeof item.errorDetailsCount === 'number')
         ? item.errorDetailsCount
         : ((item.errorDetails && Array.isArray(item.errorDetails))
           ? item.errorDetails.length
-          : ((typeof item.equipmentTypeCount === 'number' && item.equipmentTypeCount > 0) ? item.equipmentTypeCount : 1));
-      const badgeHtml = getReviewBadgeHtml(item.reviewStatus);
+          : (isDraft
+            ? (typeof item.equipmentTypeCount === 'number' ? item.equipmentTypeCount : 0)
+            : ((typeof item.equipmentTypeCount === 'number' && item.equipmentTypeCount > 0) ? item.equipmentTypeCount : 1)));
+      const isRecoveryRequired = Boolean(item.recoveryRequired === true || item.recoveryStatus === 'RECOVERY_REQUIRED');
+      const badgeHtml = getReviewBadgeHtml(item.reviewStatus, item.recordStatus);
+      const recoveryBadgeHtml = isRecoveryRequired
+        ? ' <span class="badge-review review-ng" style="background:#FEE2E2;color:#991B1B;border:1px solid #EF4444;">データ確認が必要です</span>'
+        : '';
+      const revBadgeHtml = (item.revision && item.revision > 1)
+        ? ` <span style="font-size:0.75rem;color:#64748B;font-weight:600;">Rev.${escapeHtml(String(item.revision))}</span>`
+        : '';
+      const countCellLabel = isDraft
+        ? (item.attachmentsCount > 0 ? `証跡${item.attachmentsCount}件` : '下書き')
+        : `${errCount}件`;
 
-      // 1. Desktop Table Row (7 canonical columns: 積込日, 拠点名, 担当社員名, 協力会社名, リフトマン名, 積み間違い件数, 確認状況)
+      // 1. Desktop Table Row (7 canonical columns)
       const tr = document.createElement('tr');
       tr.tabIndex = 0;
       tr.setAttribute('role', 'button');
       tr.setAttribute('aria-label', `${loadingDate} ${baseName} の詳細を開く`);
+      if (isRecoveryRequired) {
+        tr.style.backgroundColor = '#FEF2F2';
+      } else if (isDraft) {
+        tr.style.backgroundColor = '#FFFDF5';
+      }
       tr.innerHTML = `
         <td style="font-weight: 700; color: var(--palette-headline); font-size: 0.95rem;">${escapeHtml(loadingDate)}</td>
         <td>${escapeHtml(baseName)}</td>
         <td>${escapeHtml(empName)}</td>
         <td>${escapeHtml(partnerName)}</td>
         <td>${escapeHtml(liftName)}</td>
-        <td style="text-align: center; font-weight: 700; color: #DC2626;">${errCount}件</td>
-        <td style="text-align: center;">${badgeHtml}</td>
+        <td style="text-align: center; font-weight: 700; color: ${isDraft ? '#92400E' : '#DC2626'};">${escapeHtml(countCellLabel)}</td>
+        <td style="text-align: center;">${badgeHtml}${recoveryBadgeHtml}${revBadgeHtml}</td>
       `;
       const openRowAction = () => openDetailView(checkId);
       tr.addEventListener('click', openRowAction);
@@ -3499,25 +5209,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       tblShipmentChecksBody.appendChild(tr);
 
       // 2. iPhone Compact Card (~3 rows per UI-REVIEW-003)
-      // Row 1: loadingDate / 積み間違い件数 (errCount)
-      // Row 2: historicalBaseName / employeeName
-      // Row 3: partnerName / liftOperatorName
       const card = document.createElement('div');
       card.className = 'compact-result-card';
+      if (isRecoveryRequired) {
+        card.style.borderLeft = '4px solid #DC2626';
+        card.style.backgroundColor = '#FEF2F2';
+      } else if (isDraft) {
+        card.style.borderLeft = '4px solid #F59E0B';
+        card.style.backgroundColor = '#FFFDF5';
+      }
       card.tabIndex = 0;
       card.setAttribute('role', 'button');
       card.setAttribute('aria-label', `${loadingDate} ${baseName} の詳細を開く`);
       card.innerHTML = `
         <div class="compact-card-row-1">
-          <span class="compact-date-base">${escapeHtml(loadingDate)}　エラー ${errCount}件</span>
-          ${badgeHtml}
+          <span class="compact-date-base">${escapeHtml(loadingDate)}　${isDraft ? (item.attachmentsCount ? '証跡' + item.attachmentsCount + '件' : '一時保存中') : `エラー ${errCount}件`}</span>
+          <span>${badgeHtml}${recoveryBadgeHtml}${revBadgeHtml}</span>
         </div>
         <div class="compact-card-row-2">
           ${escapeHtml(baseName)} / ${escapeHtml(empName)}
         </div>
         <div class="compact-card-row-3">
           <span>${escapeHtml(partnerName)} / ${escapeHtml(liftName)}</span>
-          <span style="font-size: 0.8rem; color: var(--palette-paragraph);">詳細 →</span>
+          <span style="font-size: 0.8rem; color: ${isRecoveryRequired ? '#991B1B' : 'var(--palette-paragraph)'}; font-weight: ${isRecoveryRequired ? '700' : '400'};">${isRecoveryRequired ? 'データ確認が必要です →' : (isDraft ? '入力再開 →' : '詳細 →')}</span>
         </div>
       `;
       card.addEventListener('click', openRowAction);
@@ -3531,6 +5245,159 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  async function openRecordForEditing(aggregateData, hydrateOptions = {}) {
+    if (!aggregateData || isOpeningRecordForEditing) return;
+    if (
+      aggregateData.recoveryRequired === true ||
+      aggregateData.recoveryStatus === 'RECOVERY_REQUIRED' ||
+      aggregateData.canEdit === false
+    ) {
+      const blockMsg = (aggregateData.recoveryRequired === true || aggregateData.recoveryStatus === 'RECOVERY_REQUIRED')
+        ? 'データ確認が必要です：前回の更新処理が中断されたため編集できません。管理者に連絡してください。'
+        : 'このデータは編集できません。';
+      showSubmitBanner('error', blockMsg);
+      return;
+    }
+
+    isOpeningRecordForEditing = true;
+    const triggerBtn = document.getElementById('btnResumeOrEditRecord');
+    const originalBtnText = triggerBtn ? triggerBtn.textContent : '';
+    if (triggerBtn) {
+      triggerBtn.disabled = true;
+      triggerBtn.setAttribute('aria-busy', 'true');
+      triggerBtn.textContent = '読み込み中...';
+    }
+
+    const prevModalErr = document.getElementById('detailEditLoadErrorBanner');
+    if (prevModalErr && prevModalErr.parentNode) {
+      prevModalErr.parentNode.removeChild(prevModalErr);
+    }
+
+    const lm = resolveLoadingManager();
+    if (lm) {
+      lm.showProgressBar();
+      lm.showBlockingLoader(
+        '実績データを読み込み中...',
+        '保存済みの入力情報・添付情報を取得しています。しばらくお待ちください。'
+      );
+    }
+
+    const slowNoticeMs = typeof hydrateOptions.slowNoticeMs === 'number' ? hydrateOptions.slowNoticeMs : 4000;
+    let slowLoadTimer = setTimeout(() => {
+      if (!isOpeningRecordForEditing) return;
+      const activeLm = resolveLoadingManager();
+      if (activeLm && typeof activeLm.updateBlockingLoaderMessage === 'function') {
+        activeLm.updateBlockingLoaderMessage(
+          '実績データを読み込み中...',
+          '通信に時間がかかっています。保存済みの入力情報・添付情報を取得中のため、再操作せずそのままお待ちください。'
+        );
+      }
+    }, slowNoticeMs);
+
+    try {
+      const client = resolveActiveShipmentClient();
+      const targetId = String(
+        aggregateData.draftId ||
+        aggregateData.shippingCheckId ||
+        (aggregateData.shipmentCheck && aggregateData.shipmentCheck.shippingCheckId) ||
+        ''
+      ).trim();
+
+      let effectiveData = aggregateData;
+      if (hydrateOptions.fetchLatest === true && targetId && client && typeof client.getShipment === 'function') {
+        const [freshRes] = await Promise.all([
+          client.getShipment(targetId),
+          populateBaseStaffDropdowns(false)
+        ]);
+        if (!freshRes || freshRes.ok === false) {
+          throw new Error((freshRes && freshRes.error && freshRes.error.message) || '保存済みデータの取得に失敗しました。');
+        }
+        effectiveData = freshRes.payload || freshRes.data || freshRes;
+      } else {
+        await populateBaseStaffDropdowns(false);
+      }
+
+      if (
+        effectiveData && (
+          effectiveData.recoveryRequired === true ||
+          effectiveData.recoveryStatus === 'RECOVERY_REQUIRED' ||
+          effectiveData.canEdit === false
+        )
+      ) {
+        const latestBlockMsg = (effectiveData.recoveryRequired === true || effectiveData.recoveryStatus === 'RECOVERY_REQUIRED')
+          ? 'データ確認が必要です：前回の更新処理が中断されたため編集できません。管理者に連絡してください。'
+          : 'このデータは編集できません。';
+        throw new Error(latestBlockMsg);
+      }
+
+      closeDetailModal();
+      hideRevisionConflictBanner();
+      const sBanner = document.getElementById('submitResultBanner');
+      if (sBanner) sBanner.style.display = 'none';
+      clearSubmitResultActions();
+
+      formState.hydrateFromAggregate(effectiveData, hydrateOptions);
+      if (client && typeof client.startNewSubmission === 'function') {
+        client.startNewSubmission();
+      }
+      syncFormControlsFromState();
+      switchView('record');
+      if (typeof window.scrollTo === 'function') {
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { }
+      }
+    } catch (loadErr) {
+      const rawMsg = (loadErr && loadErr.message && !loadErr.message.includes('fetch'))
+        ? loadErr.message
+        : '保存済みの入力情報・添付情報の取得に失敗しました。接続状況を確認してください。';
+      const fullErrMsg = rawMsg.startsWith('データ確認が必要です')
+        ? rawMsg
+        : ('実績データの読み込みに失敗しました：' + rawMsg);
+
+      if (detailModal && detailModal.classList.contains('open') && detailBodyContent) {
+        const errBanner = document.createElement('div');
+        errBanner.id = 'detailEditLoadErrorBanner';
+        errBanner.setAttribute('role', 'alert');
+        errBanner.style.cssText = 'padding: 12px 16px; margin-bottom: 12px; border-radius: 8px; background-color: #FEF2F2; border: 1px solid #FECACA; color: #991B1B; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;';
+
+        const msgSpan = document.createElement('div');
+        msgSpan.style.cssText = 'font-size: 0.9rem; font-weight: 700; flex: 1; min-width: 200px;';
+        msgSpan.textContent = fullErrMsg;
+
+        const backBtn = document.createElement('button');
+        backBtn.type = 'button';
+        backBtn.id = 'btnBackToListFromEditError';
+        backBtn.className = 'btn btn-secondary';
+        backBtn.style.cssText = 'min-height: 44px; font-weight: 700; white-space: nowrap;';
+        backBtn.textContent = '実績一覧へ戻る';
+        backBtn.addEventListener('click', () => {
+          closeDetailModal();
+          switchView('list');
+        });
+
+        errBanner.appendChild(msgSpan);
+        errBanner.appendChild(backBtn);
+        detailBodyContent.insertBefore(errBanner, detailBodyContent.firstChild);
+      } else {
+        showSubmitBanner('error', fullErrMsg);
+      }
+    } finally {
+      if (slowLoadTimer) {
+        clearTimeout(slowLoadTimer);
+        slowLoadTimer = null;
+      }
+      isOpeningRecordForEditing = false;
+      if (triggerBtn && triggerBtn.isConnected) {
+        triggerBtn.disabled = false;
+        triggerBtn.removeAttribute('aria-busy');
+        if (originalBtnText) triggerBtn.textContent = originalBtnText;
+      }
+      if (lm) {
+        lm.hideBlockingLoader();
+        lm.hideProgressBar();
+      }
+    }
+  }
+
   let currentDetailLoadSeq = 0;
 
   // Open Detail View
@@ -3541,19 +5408,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     const seq = currentDetailLoadSeq;
 
     document.body.style.overflow = 'hidden';
-    detailBodyContent.innerHTML = '<div style="padding: 32px; text-align: center; color: var(--color-text-muted);">実績詳細を読み込み中...</div>';
+    detailBodyContent.innerHTML = '<div style="padding: 32px; text-align: center; color: var(--color-text-muted); display: flex; flex-direction: column; align-items: center; gap: 12px;"><div class="inline-spinner" style="width: 28px; height: 28px;" aria-hidden="true"></div><div>実績詳細を読み込み中...</div></div>';
     detailModal.classList.add('open');
 
     try {
-      let detailData = null;
-      if (shipmentClient && typeof shipmentClient.getShipment === 'function') {
-        const res = await shipmentClient.getShipment(shippingCheckId);
-        detailData = (res && res.payload) ? res.payload : (res || {});
-      } else if (rpcClient && typeof rpcClient.call === 'function') {
-        const res = await rpcClient.call('shipment.get', { shippingCheckId: shippingCheckId });
-        detailData = (res && res.payload) ? res.payload : (res || {});
-      } else {
+      const fetchDetailFn = async () => {
+        if (shipmentClient && typeof shipmentClient.getShipment === 'function') {
+          const res = await shipmentClient.getShipment(shippingCheckId);
+          return (res && res.payload) ? res.payload : (res || {});
+        } else if (rpcClient && typeof rpcClient.call === 'function') {
+          const res = await rpcClient.call('shipment.get', { shippingCheckId: shippingCheckId });
+          return (res && res.payload) ? res.payload : (res || {});
+        }
         throw new Error('RPCクライアントが利用できません');
+      };
+
+      let detailData = null;
+      if (typeof shipmentCache !== 'undefined' && typeof shipmentCache.fetchDetailWithDeduplication === 'function') {
+        const empKey = currentAccessContext?.empNo || 'ANON';
+        const dedupRes = await shipmentCache.fetchDetailWithDeduplication(
+          `shipment.get:${empKey}:${shippingCheckId}`,
+          fetchDetailFn
+        );
+        detailData = dedupRes.data;
+      } else {
+        detailData = await fetchDetailFn();
       }
 
       if (seq !== currentDetailLoadSeq) return;
@@ -3561,7 +5440,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderDetailContent(detailData);
     } catch (err) {
       if (seq !== currentDetailLoadSeq) return;
-      detailBodyContent.innerHTML = '<div style="padding: 24px; color: #DC2626; text-align: center;">詳細データの取得に失敗しました。接続状況を確認の上、再試行してください。</div>';
+      const errMsg = (err && err.message && !err.message.includes('fetch'))
+        ? err.message
+        : '詳細データの取得に失敗しました。接続状況を確認の上、再試行してください。';
+      detailBodyContent.innerHTML = `<div style="padding: 24px; color: #DC2626; font-weight: 600; text-align: center;">${escapeHtml(errMsg)}</div>`;
     }
   }
 
@@ -3586,12 +5468,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Render Detail Content
+  // Render Detail Content (supports both DRAFT and COMPLETED aggregates, co-editing & edit history)
   function renderDetailContent(data) {
     if (!detailBodyContent) return;
 
-    // Normalize DTO structure: handles both { shipmentCheck, details } from GAS and flat DTO
-    const parent = (data && data.shipmentCheck) ? data.shipmentCheck : (data || {});
+    const isDraft = Boolean(data && data.recordStatus === 'DRAFT');
+    const draftState = isDraft ? (data.draftState || {}) : null;
+    const parent = isDraft
+      ? {
+        shippingCheckId: data.draftId || data.shippingCheckId,
+        loadingDate: draftState.loadingDate,
+        registeredAt: data.updatedAt || data.createdAt,
+        inputStartedAt: draftState.inputStartedAt || data.createdAt,
+        employeeCode: data.createdByEmpNo,
+        employeeName: data.createdByName,
+        historicalBaseCode: data.baseCode,
+        historicalBaseName: data.baseName,
+        historicalAreaName: data.areaName,
+        liftOperatorCode: draftState.liftOperatorCode,
+        liftOperatorName: draftState.liftOperatorName,
+        partnerCode: draftState.partnerCode,
+        partnerName: draftState.partnerName,
+        equipmentTypeCount: draftState.equipmentTypeCount,
+        hasLooseItems: draftState.hasLooseItems,
+        looseItemCreatorName: draftState.looseItemCreatorName,
+        looseItemStatus: draftState.looseItemStatus,
+        transportCategory: draftState.transportCategory,
+        carrierName: draftState.carrierName,
+        driverName: draftState.driverName,
+        reviewStatus: '一時保存'
+      }
+      : ((data && data.shipmentCheck) ? data.shipmentCheck : (data || {}));
+
     const details = (data && Array.isArray(data.details))
       ? data.details
       : ((parent && Array.isArray(parent.details))
@@ -3602,152 +5510,377 @@ document.addEventListener('DOMContentLoaded', async () => {
       : ((parent && Array.isArray(parent.attachments))
         ? parent.attachments
         : []);
+    const looseCreatorsList = Array.isArray(data && data.looseItemCreators) ? data.looseItemCreators : [];
+    const gov = (data && data.governance) || null;
+    const editHistory = Array.isArray(data && data.editHistory) ? data.editHistory : [];
+    const revision = Number((data && data.revision) || (gov && gov.revision)) || 1;
+    const isRecoveryRequired = Boolean(
+      data && (data.recoveryRequired === true || data.recoveryStatus === 'RECOVERY_REQUIRED')
+    );
+    const canEdit = !isRecoveryRequired && Boolean(data && data.canEdit === true);
 
-    const regTime = formatDateTimeString(parent.registeredAt);
-    const inStartTime = formatDateTimeString(parent.inputStartedAt || parent.inputStartAt);
-    const badgeHtml = getReviewBadgeHtml(parent.reviewStatus);
+    function cleanDetailVal(raw) {
+      if (raw === null || raw === undefined) return '';
+      const s = String(raw).trim();
+      if (!s || s === '---' || s === '未選択' || s === '未設定' || s === '未指定' || s === 'エリア未設定') {
+        return '';
+      }
+      return s;
+    }
 
-    // Parent Information Grid
-    let parentHtml = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-md); padding-bottom: 10px; border-bottom: 1px solid var(--color-border);">
-        <div>
-          <div style="font-size: 1.1rem; font-weight: bold; color: var(--color-text-main);">${escapeHtml(regTime)} 登録</div>
-          <div style="font-size: 0.85rem; color: var(--color-text-muted);">入力開始: ${escapeHtml(inStartTime)}</div>
-        </div>
-        ${badgeHtml}
-      </div>
-
-      <div class="detail-info-grid">
-        <div class="detail-info-item">
-          <span class="detail-info-label">担当社員</span>
-          <span class="detail-info-val">${escapeHtml(parent.employeeName || '---')} (${escapeHtml(parent.employeeCode || '---')})</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">所属拠点 / エリア</span>
-          <span class="detail-info-val">${escapeHtml(parent.historicalBaseName || '---')} / ${escapeHtml(parent.historicalAreaName || 'エリア未設定')}</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">リフトマン</span>
-          <span class="detail-info-val">${escapeHtml(parent.liftOperatorName || '---')} (${escapeHtml(parent.liftOperatorCode || '---')})</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">協力会社</span>
-          <span class="detail-info-val">${escapeHtml(parent.partnerName || '---')} (${escapeHtml(parent.partnerCode || '---')})</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">点検品種数 / バラ有無</span>
-          <span class="detail-info-val">${parent.equipmentTypeCount ?? '---'} 品種 / ${parent.hasLooseItems ? 'バラあり' : 'バラなし'}</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">バラ作成担当者 / 状況</span>
-          <span class="detail-info-val">${escapeHtml(parent.looseItemCreatorName || '未入力')} / ${escapeHtml(parent.looseItemStatus || '未設定')}</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">便種別 / 運送会社 / 運転手</span>
-          <span class="detail-info-val">${escapeHtml(parent.transportCategory || '---')} / ${escapeHtml(parent.carrierName || '未入力')} / ${escapeHtml(parent.driverName || '未入力')}</span>
-        </div>
-        <div class="detail-info-item">
-          <span class="detail-info-label">審査情報</span>
-          <span class="detail-info-val">${escapeHtml(parent.reviewStatus || '未確認')}${parent.reviewerName ? ' (' + escapeHtml(parent.reviewerName) + ')' : ''}</span>
-        </div>
-      </div>
-    `;
-
-    // Review Details section if reviewed
-    if (parent.reviewComment || parent.reviewedAt) {
-      parentHtml += `
-        <div style="background: #F8FAFC; padding: 12px; border-radius: var(--radius-sm); margin-bottom: var(--space-md); border-left: 4px solid var(--color-primary);">
-          <div style="font-size: 0.85rem; font-weight: bold; color: var(--color-text-muted);">審査履歴</div>
-          <div style="font-size: 0.9rem; margin-top: 4px;">${escapeHtml(parent.reviewComment || 'コメントなし')}</div>
-          <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 4px;">審査日時: ${formatDateTimeString(parent.reviewedAt)}</div>
+    function renderDetailItem(label, rawVal, opts = {}) {
+      const valStr = cleanDetailVal(rawVal);
+      const isEmpty = !valStr;
+      const itemCls = `detail-info-item${opts.fullSpan ? ' is-full-span' : ''}`;
+      const valCls = `detail-info-val${isEmpty ? ' is-empty' : ''}${opts.extraValClass ? ' ' + opts.extraValClass : ''}`;
+      return `
+        <div class="${itemCls}">
+          <span class="detail-info-label">${escapeHtml(label)}</span>
+          <span class="${valCls}">${escapeHtml(isEmpty ? '未入力' : valStr)}</span>
         </div>
       `;
     }
 
-    // 1..N Shipping Error Details
+    function formatActorText(nameRaw, codeRaw) {
+      const n = cleanDetailVal(nameRaw);
+      const c = cleanDetailVal(codeRaw);
+      if (n && c) return `${n}（${c}）`;
+      return n || c || '';
+    }
+
+    const createdByDisplay = (data && (data.createdByName || data.createdByEmpNo))
+      ? formatActorText(data.createdByName, data.createdByEmpNo)
+      : formatActorText(parent.employeeName, parent.employeeCode);
+    const updatedByDisplay = (data && (data.updatedByName || data.updatedByEmpNo))
+      ? formatActorText(data.updatedByName, data.updatedByEmpNo)
+      : createdByDisplay;
+
+    const baseNameClean = cleanDetailVal(parent.historicalBaseName);
+    const areaNameClean = cleanDetailVal(parent.historicalAreaName);
+    const baseDisplay = baseNameClean
+      ? (areaNameClean ? `${baseNameClean}（${areaNameClean}）` : baseNameClean)
+      : (areaNameClean || '');
+
+    const eqCountDisplay = (parent.equipmentTypeCount !== null && parent.equipmentTypeCount !== undefined && parent.equipmentTypeCount !== '')
+      ? `${parent.equipmentTypeCount} 品種`
+      : '';
+
+    const createdAtRaw = formatDateTimeString((data && data.createdAt) || parent.registeredAt);
+    const updatedAtRaw = formatDateTimeString((data && data.updatedAt) || parent.registeredAt);
+    const inStartRaw = formatDateTimeString(parent.inputStartedAt || parent.inputStartAt);
+    const createdAtLabel = cleanDetailVal(createdAtRaw) || '未入力';
+    const updatedAtLabel = cleanDetailVal(updatedAtRaw) || '未入力';
+    const inStartTime = cleanDetailVal(inStartRaw) || '未入力';
+
+    const badgeHtml = getReviewBadgeHtml(parent.reviewStatus, data && data.recordStatus);
+    const recoveryBadgeHtml = isRecoveryRequired
+      ? ' <span class="badge-review review-ng" style="background:#FEE2E2;color:#991B1B;border:1px solid #EF4444;">データ確認が必要です</span>'
+      : '';
+
+    // Loose items & plain-text multi-creator formatting (no blue chips)
+    let looseDisplayText = '';
+    if (parent.hasLooseItems === true) looseDisplayText = 'バラあり';
+    else if (parent.hasLooseItems === false) looseDisplayText = 'バラなし';
+
+    let creatorsPlainText = '';
+    if (looseCreatorsList.length > 0) {
+      creatorsPlainText = looseCreatorsList
+        .map((c) => cleanDetailVal(c && c.looseItemCreatorName))
+        .filter(Boolean)
+        .join('、');
+    }
+    if (!creatorsPlainText && parent.looseItemCreatorName) {
+      creatorsPlainText = String(parent.looseItemCreatorName)
+        .split(/\s*[,、]\s*/)
+        .map((s) => cleanDetailVal(s))
+        .filter(Boolean)
+        .join('、');
+    }
+
+    // Guidance confirmation fields
+    let guidanceStateHtml = '<span class="detail-info-val is-empty">未入力</span>';
+    let guidanceActorDisplay = '';
+    let guidanceTimeDisplay = '';
+    if (isDraft) {
+      guidanceStateHtml = (draftState && draftState.guidanceConfirmed)
+        ? '<span class="detail-guidance-state is-confirmed">確認済（一時保存中）</span>'
+        : '<span class="detail-guidance-state is-pending">未確認（完了登録時に確認）</span>';
+    } else if (gov && gov.guidanceConfirmed) {
+      guidanceStateHtml = '<span class="detail-guidance-state is-confirmed">指導実施確認済</span>';
+      guidanceActorDisplay = formatActorText(gov.guidanceConfirmedByName, gov.guidanceConfirmedByEmpNo);
+      guidanceTimeDisplay = gov.guidanceConfirmedAt ? cleanDetailVal(formatDateTimeString(gov.guidanceConfirmedAt)) : '';
+    }
+
+    // 1. Header Summary & Co-Editing / Quarantine Action Bar
+    let coEditBarHtml = '';
+    if (isRecoveryRequired) {
+      const recNotice = (data && data.recoveryMessage) ? String(data.recoveryMessage) : 'データ確認が必要です';
+      coEditBarHtml = `
+        <div class="detail-edit-action-bar" id="detailRecoveryNoticeBar" role="alert" style="background-color: #FEF2F2; border: 2px solid #EF4444; color: #991B1B;">
+          <div style="font-size: 0.9rem; font-weight: 700;">
+            【重要】${escapeHtml(recNotice)}：前回の更新処理が中断された可能性があるため、データ保護のため編集・完了登録・審査判定を停止しています。管理者へ連絡してください。
+          </div>
+        </div>
+      `;
+    } else if (canEdit) {
+      const btnText = isDraft ? '続きを入力する（入力再開・完了登録へ）' : 'この実績を編集する';
+      coEditBarHtml = `
+        <div class="detail-edit-action-bar">
+          <div style="font-size: 0.85rem; color: var(--color-text-muted);">
+            同じ拠点の社員が内容を編集できます。
+          </div>
+          <button type="button" id="btnResumeOrEditRecord" class="btn btn-primary" style="min-height: 44px; padding: 8px 18px; font-weight: 700;">
+            ${escapeHtml(btnText)}
+          </button>
+        </div>
+      `;
+    } else if (!isDraft && data && data.canEdit === false) {
+      coEditBarHtml = `
+        <div class="detail-edit-action-bar" style="background-color: #F8FAFC;">
+          <div style="font-size: 0.84rem; color: var(--color-text-muted);">
+            ※他Base（拠点）の完了実績のため閲覧専用です（編集は所属Baseの社員のみ可能）。
+          </div>
+        </div>
+      `;
+    }
+
+    const formattedLoadingDate = parent.loadingDate ? cleanDetailVal(formatDisplayDate(parent.loadingDate)) : '';
+    const headerSummaryHtml = `
+      <div class="detail-top-summary">
+        <div class="detail-top-date-block">
+          <span class="detail-info-label">積込日</span>
+          <span class="detail-top-date-val${formattedLoadingDate ? '' : ' is-empty'}">${escapeHtml(formattedLoadingDate || '未入力')}</span>
+        </div>
+        <div class="detail-top-status-block" aria-label="確認状況">
+          ${badgeHtml}${recoveryBadgeHtml}
+        </div>
+      </div>
+      ${coEditBarHtml}
+    `;
+
+    // 2. 基本情報
+    const showSeparateUpdater = Boolean(updatedByDisplay && updatedByDisplay !== createdByDisplay);
+    const basicInfoHtml = `
+      <section class="detail-group-section" aria-label="基本情報">
+        <h3 class="detail-group-title">基本情報</h3>
+        <div class="detail-info-grid">
+          ${renderDetailItem('所属Base', baseDisplay)}
+          ${renderDetailItem('登録者', createdByDisplay)}
+          ${showSeparateUpdater ? renderDetailItem('最終更新者', updatedByDisplay) : ''}
+          ${renderDetailItem('点検品種数', eqCountDisplay)}
+          ${renderDetailItem('便種別（車両区分）', parent.transportCategory)}
+          ${renderDetailItem('リフトマン', parent.liftOperatorName)}
+          ${renderDetailItem('協力会社', parent.partnerName)}
+          ${renderDetailItem('運送会社', parent.carrierName)}
+          ${renderDetailItem('運転手名', parent.driverName)}
+        </div>
+      </section>
+    `;
+
+    // 3. バラ作成情報
+    const looseInfoHtml = `
+      <section class="detail-group-section" aria-label="バラ作成情報">
+        <h3 class="detail-group-title">バラ作成情報</h3>
+        <div class="detail-info-grid">
+          ${renderDetailItem('バラ荷の有無', looseDisplayText)}
+          ${renderDetailItem('バラ作成状況', parent.looseItemStatus)}
+          ${renderDetailItem('バラ作成担当者', creatorsPlainText, { fullSpan: true, extraValClass: 'detail-creators-text' })}
+        </div>
+      </section>
+    `;
+
+    // 4. 指導実施確認
+    const guidanceSectionHtml = `
+      <section class="detail-group-section" aria-label="指導実施確認">
+        <h3 class="detail-group-title">指導実施確認</h3>
+        <div class="detail-info-grid">
+          <div class="detail-info-item">
+            <span class="detail-info-label">指導確認状態</span>
+            <div>${guidanceStateHtml}</div>
+          </div>
+          ${renderDetailItem('確認者', guidanceActorDisplay)}
+          ${renderDetailItem('確認日時', guidanceTimeDisplay)}
+        </div>
+      </section>
+    `;
+
+    // 5. 積み間違い資材
     let detailsHtml = `
-      <div style="margin-top: var(--space-lg);">
-        <h3 style="font-size: 1.05rem; font-weight: bold; margin-bottom: var(--space-sm); color: var(--color-text-main); display: flex; align-items: center; gap: 8px;">
-          <span>積み間違い資材</span>
-          <span class="badge" style="background: #FEE2E2; color: #DC2626;">${details.length}件</span>
-        </h3>
+      <section class="detail-group-section" aria-label="積み間違い資材">
+        <div class="detail-group-header">
+          <h3 class="detail-group-title">積み間違い資材</h3>
+          <span class="detail-count-badge">${details.length}件</span>
+        </div>
     `;
 
     if (details.length === 0) {
-      detailsHtml += '<div style="padding: 16px; color: var(--color-text-muted); background: #F8FAFC; border-radius: 6px;">積み間違い資材はありません</div>';
+      detailsHtml += `<div class="detail-empty-box">${isDraft ? '未入力（一時保存中）' : '積み間違い資材はありません'}</div>`;
     } else {
       details.forEach((d, idx) => {
-        const cat = d.category || '区分未設定';
-        const matName = d.materialName || '資材名未設定';
-        const matCode = d.materialCode || '---';
-        const cause = d.causeDetail || '詳細未入力';
+        const cat = cleanDetailVal(d && d.category) || '未入力';
+        const matName = cleanDetailVal(d && d.materialName) || '未入力';
+        const matCode = cleanDetailVal(d && d.materialCode) || '未入力';
+        const cause = cleanDetailVal(d && d.causeDetail) || '未入力';
 
         detailsHtml += `
           <div class="detail-child-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-weight: bold; font-size: 0.95rem; color: var(--color-text-main);">#${idx + 1}</span>
-              <span class="badge" style="background: #EFF6FF; color: #1D4ED8; font-weight: 700;">${escapeHtml(cat)}</span>
+            <div class="detail-child-header">
+              <span class="detail-child-num">明細 #${idx + 1}</span>
+              <span class="detail-category-tag">${escapeHtml(cat)}</span>
             </div>
-            <div style="font-size: 0.95rem; font-weight: 600; color: var(--color-text-main); margin-bottom: 4px;">
-              ${escapeHtml(matName)}
+            <div class="detail-info-grid" style="margin-bottom: 10px;">
+              ${renderDetailItem('資材名', matName)}
+              ${renderDetailItem('資材コード', matCode)}
             </div>
-            <div style="font-size: 0.82rem; color: var(--color-text-muted); margin-bottom: 8px;">
-              資材コード: ${escapeHtml(matCode)}
-            </div>
-            <div style="font-size: 0.88rem; background: #FFFFFF; padding: 10px; border-radius: 4px; border: 1px solid var(--color-border); white-space: pre-wrap;">
-              ${escapeHtml(cause)}
+            <div class="detail-info-item">
+              <span class="detail-info-label">原因・詳細</span>
+              <div class="detail-child-cause-box${cause === '未入力' ? ' is-empty' : ''}">${escapeHtml(cause)}</div>
             </div>
           </div>
         `;
       });
     }
-    detailsHtml += '</div>';
+    detailsHtml += '</section>';
 
-    // 0..N Attachment Metadata
+    // 6. 証跡添付 (Authenticated Google Drive Photo & PDF Viewing)
+    const targetShippingCheckId = String(parent.shippingCheckId || (data && (data.draftId || data.shippingCheckId)) || '').trim();
     let attHtml = `
-      <div style="margin-top: var(--space-lg); margin-bottom: var(--space-md);">
-        <h3 style="font-size: 1.05rem; font-weight: bold; margin-bottom: var(--space-sm); color: var(--color-text-main); display: flex; align-items: center; gap: 8px;">
-          <span>証跡添付</span>
-          <span class="badge" style="background: #F1F5F9; color: #475569;">${attachments.length}件</span>
-        </h3>
+      <section class="detail-group-section" aria-label="証跡添付">
+        <div class="detail-group-header">
+          <h3 class="detail-group-title">証跡添付</h3>
+          <span class="detail-count-badge">${attachments.length}件</span>
+        </div>
     `;
 
     if (attachments.length === 0) {
-      attHtml += '<div style="padding: 16px; color: var(--color-text-muted); background: #F8FAFC; border-radius: 6px;">添付ファイルはありません</div>';
+      attHtml += '<div class="detail-empty-box">未入力（添付ファイルなし）</div>';
     } else {
-      attachments.forEach((a) => {
-        const isPdf = a.attachmentType === 'pdf_link';
+      attachments.forEach((a, idx) => {
+        const normType = String(a.attachmentType || '').toLowerCase() === 'pdf' ? 'pdf' : 'photo';
+        const isPdf = normType === 'pdf';
         const typeBadge = isPdf
-          ? '<span class="attachment-type-badge pdf">PDFリンク</span>'
+          ? '<span class="attachment-type-badge pdf">PDF</span>'
           : '<span class="attachment-type-badge photo">写真</span>';
-        const filename = a.originalFilename || (isPdf ? 'PDFファイル' : '写真');
-        const loc = a.storageLocation || '参照先未設定';
+        const filename = a.originalFilename || (isPdf ? 'PDFファイル.pdf' : '伝票写真.jpg');
+        const attId = String(a.attachmentId || '').trim();
+        const sizeLabel = formatFileSize(Number(a.fileSize) || 0);
+        const createdLabel = a.createdAt ? cleanDetailVal(formatDateTimeString(a.createdAt)) : '';
+        const subMeta = [sizeLabel, createdLabel].filter(Boolean).join(' / ') || (isPdf ? 'PDFドキュメント' : '画像ファイル');
+
+        const thumbBoxHtml = isPdf
+          ? `<div class="detail-attachment-thumb btn-open-attachment-viewer" data-check-id="${escapeHtml(targetShippingCheckId)}" data-attachment-id="${escapeHtml(attId)}" data-attachment-type="pdf" data-filename="${escapeHtml(filename)}" data-mime="${escapeHtml(a.mimeType || 'application/pdf')}" role="button" tabindex="0" aria-label="${escapeHtml(filename)} を開く" style="background: #FEF2F2; border-color: #FECACA;">
+               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#B91C1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+             </div>`
+          : `<div class="detail-attachment-thumb btn-open-attachment-viewer js-lazy-photo-thumb" data-check-id="${escapeHtml(targetShippingCheckId)}" data-attachment-id="${escapeHtml(attId)}" data-attachment-type="photo" data-filename="${escapeHtml(filename)}" data-mime="${escapeHtml(a.mimeType || 'image/jpeg')}" data-index="${idx + 1}" role="button" tabindex="0" aria-label="${escapeHtml(filename)} を拡大表示">
+               <span style="font-size: 0.72rem; color: var(--color-text-muted);">読込中...</span>
+             </div>`;
+
+        const actionBtnLabel = isPdf ? 'PDFを開く' : '拡大表示';
 
         attHtml += `
-          <div class="detail-child-card" style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
-            <div style="flex: 1; min-width: 0;">
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                ${typeBadge}
-                <span style="font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(filename)}</span>
-              </div>
-              <div style="font-size: 0.8rem; color: var(--color-text-muted); word-break: break-all;">
-                参照先: ${escapeHtml(loc)}
+          <div class="detail-attachment-card">
+            <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
+              ${thumbBoxHtml}
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
+                  ${typeBadge}
+                  <span style="font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;" title="${escapeHtml(filename)}">${escapeHtml(filename)}</span>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--color-text-muted);">
+                  ${escapeHtml(subMeta)}
+                </div>
               </div>
             </div>
-            ${isPdf && loc && loc !== '参照先未設定' ? `
-              <button type="button" class="btn btn-secondary btn-copy-loc" data-loc="${escapeHtml(loc)}" style="min-height: 40px; padding: 4px 12px; font-size: 0.85rem; white-space: nowrap;">
-                リンクをコピー
+            <div class="detail-attachment-actions">
+              <button type="button" class="btn btn-secondary btn-open-attachment-viewer"
+                data-check-id="${escapeHtml(targetShippingCheckId)}"
+                data-attachment-id="${escapeHtml(attId)}"
+                data-attachment-type="${normType}"
+                data-filename="${escapeHtml(filename)}"
+                data-mime="${escapeHtml(a.mimeType || (isPdf ? 'application/pdf' : 'image/jpeg'))}"
+                style="min-height: 40px; min-width: auto; padding: 6px 14px; font-size: 0.85rem; white-space: nowrap;">
+                ${actionBtnLabel}
               </button>
-            ` : ''}
+            </div>
           </div>
         `;
       });
     }
-    attHtml += '</div>';
+    attHtml += '</section>';
 
-    detailBodyContent.innerHTML = parentHtml + detailsHtml + attHtml;
+    // 7. 審査情報・変更履歴
+    const reviewerDisplay = formatActorText(parent.reviewerName, parent.reviewerEmpNo);
+    const reviewedAtDisplay = parent.reviewedAt ? cleanDetailVal(formatDateTimeString(parent.reviewedAt)) : '';
+    const reviewInfoGridHtml = isDraft
+      ? ''
+      : `
+        <div class="detail-info-grid">
+          <div class="detail-info-item">
+            <span class="detail-info-label">審査状況</span>
+            <div>${badgeHtml}</div>
+          </div>
+          ${renderDetailItem('審査者', reviewerDisplay)}
+          ${renderDetailItem('審査日時', reviewedAtDisplay)}
+          ${renderDetailItem('審査コメント', parent.reviewComment, { fullSpan: true })}
+        </div>
+      `;
 
-    // TASK-010: Render Review Action Panel
+    const actionLabelMap = {
+      DRAFT_CREATE: '一時保存を新規作成',
+      DRAFT_UPDATE: '一時保存を更新',
+      DRAFT_PROMOTE_COMPLETE: '一時保存から完了登録',
+      COMPLETE: '新規完了登録',
+      COMPLETED_EDIT: '完了実績を更新',
+      GUIDANCE_CONFIRM_ONLY: '対象者への指導実施確認を記録',
+      REVIEW_RESET_ON_EDIT: '審査済み実績を更新（再審査待ちへリセット）',
+      ADMIN_RECOVERY_RELEASED: '管理者による整合性確認・隔離解除',
+      RECOVERY_REQUIRED: '不整合検知による保護隔離'
+    };
+
+    const historyItemsHtml = editHistory.length > 0
+      ? editHistory.slice().reverse().map((h) => {
+          const actLabel = actionLabelMap[h.actionType] || h.actionType || '更新';
+          const authTag = h.authMode === 'SIMPLE_EMPNO' ? '社員番号簡易ログイン' : 'パスワード認証';
+          const editorStr = formatActorText(h.editorName, h.editorEmpNo) || '未入力';
+          const prevRevNote = (h.prevReview && h.prevReview.reviewStatus)
+            ? `<div style="font-size:0.8rem;color:#991B1B;margin-top:4px;">旧審査記録: ${escapeHtml(h.prevReview.reviewStatus)}（審査者: ${escapeHtml(formatActorText(h.prevReview.reviewerName, h.prevReview.reviewerEmpNo) || '未入力')}）</div>`
+            : '';
+          return `
+            <div class="detail-history-item">
+              <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;font-weight:700;color:var(--color-text-main);">
+                <span>Rev.${h.newRevision}：${escapeHtml(actLabel)}</span>
+                <span style="font-weight:500;color:var(--color-text-muted);">${escapeHtml(cleanDetailVal(formatDateTimeString(h.editedAt)) || '未入力')}</span>
+              </div>
+              <div style="margin-top:2px;color:#475569;">
+                操作者: ${escapeHtml(editorStr)} ／ ${escapeHtml(authTag)}
+              </div>
+              ${prevRevNote}
+            </div>
+          `;
+        }).join('')
+      : '<div style="font-size:0.85rem;color:#64748B;">変更履歴はありません</div>';
+
+    const reviewAndHistoryHtml = `
+      <section class="detail-group-section" aria-label="審査情報・変更履歴">
+        <h3 class="detail-group-title">審査情報・変更履歴</h3>
+        ${reviewInfoGridHtml}
+        <details class="detail-collapsible">
+          <summary class="detail-collapsible-summary">
+            変更履歴・記録日時を表示（履歴 ${editHistory.length}件）
+          </summary>
+          <div class="detail-collapsible-body">
+            <div class="detail-info-grid" style="margin-bottom: 12px;">
+              ${renderDetailItem('初回登録日時', createdAtLabel)}
+              ${renderDetailItem('最終更新日時', updatedAtLabel)}
+              ${renderDetailItem('入力開始日時', inStartTime)}
+            </div>
+            <div>${historyItemsHtml}</div>
+          </div>
+        </details>
+      </section>
+    `;
+
+    // TASK-010: Render Review Action Panel ONLY for COMPLETED records
     const accessCtx = (typeof currentAccessContext !== 'undefined' ? currentAccessContext : null)
       || (typeof window !== 'undefined' ? window.__CURRENT_ACCESS_CONTEXT__ : null);
     const hasReviewCapability = (typeof AuthorizationClient !== 'undefined' && typeof AuthorizationClient.hasCapability === 'function')
@@ -3757,14 +5890,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     const reviewSecElem = (typeof viewReviewSection !== 'undefined' ? viewReviewSection : null)
       || (typeof document !== 'undefined' ? document.getElementById('viewReviewSection') : null);
     const isReviewViewActive = Boolean(reviewSecElem && reviewSecElem.style.display !== 'none');
-    const shouldRenderReviewPanel = hasReviewCapability || isReviewViewActive;
+    const shouldRenderReviewPanel = !isDraft && (hasReviewCapability || isReviewViewActive);
 
     let reviewSecHtml = '';
     if (shouldRenderReviewPanel) {
       reviewSecHtml = '<div id="detailReviewActionSection" class="detail-review-action-section" style="margin-top: var(--space-lg); margin-bottom: 24px;"></div>';
     }
 
-    detailBodyContent.innerHTML = parentHtml + detailsHtml + attHtml + reviewSecHtml;
+    detailBodyContent.innerHTML =
+      headerSummaryHtml +
+      basicInfoHtml +
+      looseInfoHtml +
+      guidanceSectionHtml +
+      detailsHtml +
+      attHtml +
+      reviewAndHistoryHtml +
+      reviewSecHtml;
+
+    const btnResumeOrEdit = document.getElementById('btnResumeOrEditRecord');
+    if (btnResumeOrEdit && canEdit) {
+      btnResumeOrEdit.addEventListener('click', () => {
+        openRecordForEditing(data, { fetchLatest: true });
+      });
+    }
 
     if (shouldRenderReviewPanel) {
       const reviewActionContainer = document.getElementById('detailReviewActionSection');
@@ -3772,28 +5920,239 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!parent.shippingCheckId && data && data.shippingCheckId) {
           parent.shippingCheckId = data.shippingCheckId;
         }
+        parent.recoveryRequired = isRecoveryRequired;
+        parent.recoveryStatus = isRecoveryRequired ? 'RECOVERY_REQUIRED' : 'NORMAL';
+        parent.recoveryMessage = isRecoveryRequired
+          ? ((data && data.recoveryMessage) || 'データ確認が必要です')
+          : '';
         window.ReviewManager.renderReviewActionPanel(reviewActionContainer, parent);
       }
     }
 
-    // Attach copy event
-    const copyBtns = detailBodyContent.querySelectorAll('.btn-copy-loc');
-    copyBtns.forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        const loc = e.target.getAttribute('data-loc');
-        if (loc && navigator.clipboard) {
-          try {
-            await navigator.clipboard.writeText(loc);
-            const origText = btn.textContent;
-            btn.textContent = 'コピー完了！';
-            setTimeout(() => { btn.textContent = origText; }, 2000);
-          } catch {
-            if (typeof modalManager !== 'undefined' && modalManager.error) {
-              modalManager.error('エラー', 'コピーに失敗しました: ' + loc);
-            }
+    // Bind interactive viewer triggers & lazy-load authenticated photo thumbnails
+    bindDetailAttachmentViewers(detailBodyContent);
+  }
+
+  function decodeBase64ToUint8Array(base64Str) {
+    const clean = String(base64Str || '').replace(/\s+/g, '');
+    if (typeof atob === 'function') {
+      const bin = atob(clean);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) {
+        out[i] = bin.charCodeAt(i);
+      }
+      return out;
+    }
+    if (typeof Buffer !== 'undefined') {
+      return new Uint8Array(Buffer.from(clean, 'base64'));
+    }
+    return new Uint8Array(0);
+  }
+
+  async function fetchAuthorizedAttachmentBlobEntry(shippingCheckId, attachmentId, fallbackMime, fallbackName) {
+    const cacheKey = `${shippingCheckId}::${attachmentId}`;
+    if (detailAttachmentBlobCache.has(cacheKey)) {
+      return detailAttachmentBlobCache.get(cacheKey);
+    }
+
+    const client = resolveActiveShipmentClient();
+    let res = null;
+    if (client && typeof client.getAttachmentContent === 'function') {
+      res = await client.getAttachmentContent(shippingCheckId, attachmentId);
+    } else if (rpcClient && typeof rpcClient.call === 'function') {
+      res = await rpcClient.call('attachment.getContent', { shippingCheckId, attachmentId });
+    } else {
+      throw new Error('証跡取得クライアントが利用できません。');
+    }
+
+    const payload = (res && res.payload) ? res.payload : (res || {});
+    if (!payload || !payload.base64Data) {
+      throw new Error('証跡ファイルデータを取得できませんでした。');
+    }
+
+    const mimeType = String(payload.mimeType || fallbackMime || 'application/octet-stream').trim();
+    const originalFilename = String(payload.originalFilename || fallbackName || 'attachment').trim();
+    const bytes = decodeBase64ToUint8Array(payload.base64Data);
+    let blobUrl = '';
+    if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      const blob = new Blob([bytes], { type: mimeType });
+      blobUrl = URL.createObjectURL(blob);
+    } else {
+      blobUrl = `data:${mimeType};base64,${payload.base64Data}`;
+    }
+
+    const entry = { blobUrl, mimeType, originalFilename };
+    detailAttachmentBlobCache.set(cacheKey, entry);
+    return entry;
+  }
+
+  let currentAttachmentViewerSeq = 0;
+  let savedDetailScrollTop = null;
+
+  function closeAttachmentViewerModal() {
+    currentAttachmentViewerSeq++;
+    if (attachmentViewerModal) {
+      attachmentViewerModal.classList.remove('open');
+      attachmentViewerModal.style.display = '';
+    }
+    if (attachmentViewerBody) {
+      attachmentViewerBody.innerHTML = '';
+    }
+    if (btnAttachmentOpenTab) {
+      btnAttachmentOpenTab.style.display = 'none';
+      btnAttachmentOpenTab.setAttribute('href', '#');
+    }
+    if (btnAttachmentDownload) {
+      btnAttachmentDownload.style.display = 'none';
+      btnAttachmentDownload.setAttribute('href', '#');
+    }
+    if (detailModal) {
+      detailModal.inert = false;
+      detailModal.removeAttribute('aria-hidden');
+    }
+    if (detailModal && detailModal.classList.contains('open')) {
+      document.body.style.overflow = 'hidden';
+      if (detailBodyContent && savedDetailScrollTop !== null) {
+        detailBodyContent.scrollTop = savedDetailScrollTop;
+      }
+    } else {
+      document.body.style.overflow = '';
+    }
+    savedDetailScrollTop = null;
+  }
+  window.closeAttachmentViewerModal = closeAttachmentViewerModal;
+
+  if (btnCloseAttachmentViewer) {
+    btnCloseAttachmentViewer.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeAttachmentViewerModal();
+    });
+  }
+  if (btnFooterCloseAttachmentViewer) {
+    btnFooterCloseAttachmentViewer.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeAttachmentViewerModal();
+    });
+  }
+  if (attachmentViewerModal) {
+    attachmentViewerModal.addEventListener('click', (e) => {
+      if (e.target === attachmentViewerModal) {
+        e.stopPropagation();
+        closeAttachmentViewerModal();
+      }
+    });
+  }
+
+  async function openAttachmentViewer(meta) {
+    if (!attachmentViewerModal || !attachmentViewerBody) return;
+    const seq = ++currentAttachmentViewerSeq;
+    const filename = meta.originalFilename || '証跡プレビュー';
+    const isPdf = meta.attachmentType === 'pdf';
+
+    if (detailModal && detailModal.classList.contains('open')) {
+      savedDetailScrollTop = detailBodyContent ? detailBodyContent.scrollTop : null;
+      detailModal.inert = true;
+      detailModal.setAttribute('aria-hidden', 'true');
+    } else {
+      savedDetailScrollTop = null;
+    }
+
+    if (attachmentViewerTitle) {
+      attachmentViewerTitle.textContent = filename;
+    }
+    if (btnAttachmentOpenTab) btnAttachmentOpenTab.style.display = 'none';
+    if (btnAttachmentDownload) btnAttachmentDownload.style.display = 'none';
+
+    attachmentViewerBody.innerHTML = '<div class="attachment-viewer-stage"><div style="padding: 32px; color: #F8FAFC; font-weight: 600; text-align: center;">証跡ファイルを読み込み中...</div></div>';
+    attachmentViewerModal.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    if (btnCloseAttachmentViewer && typeof btnCloseAttachmentViewer.focus === 'function') {
+      try { btnCloseAttachmentViewer.focus({ preventScroll: true }); } catch (e) { }
+    }
+
+    try {
+      const entry = await fetchAuthorizedAttachmentBlobEntry(
+        meta.shippingCheckId,
+        meta.attachmentId,
+        meta.mimeType,
+        filename
+      );
+      if (seq !== currentAttachmentViewerSeq) return;
+
+      if (btnAttachmentOpenTab) {
+        btnAttachmentOpenTab.href = entry.blobUrl;
+        btnAttachmentOpenTab.style.display = 'inline-flex';
+      }
+      if (btnAttachmentDownload) {
+        btnAttachmentDownload.href = entry.blobUrl;
+        btnAttachmentDownload.setAttribute('download', entry.originalFilename || filename);
+        btnAttachmentDownload.style.display = 'inline-flex';
+      }
+
+      if (isPdf) {
+        attachmentViewerBody.innerHTML =
+          `<div class="attachment-viewer-stage"><iframe class="attachment-viewer-pdf-frame" src="${escapeHtml(entry.blobUrl)}" title="${escapeHtml(entry.originalFilename || filename)}"></iframe></div>`;
+      } else {
+        attachmentViewerBody.innerHTML =
+          `<div class="attachment-viewer-stage"><img class="attachment-viewer-img" src="${escapeHtml(entry.blobUrl)}" alt="${escapeHtml(entry.originalFilename || filename)}"></div>`;
+      }
+    } catch (err) {
+      if (seq !== currentAttachmentViewerSeq) return;
+      const msg = (err && err.message && !err.message.includes('fetch'))
+        ? err.message
+        : '証跡ファイルの取得に失敗しました。権限または通信状況を確認してください。';
+      attachmentViewerBody.innerHTML =
+        `<div class="attachment-viewer-stage"><div style="padding: 24px; background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; border-radius: 6px; font-weight: 600; text-align: center; max-width: 480px;">${escapeHtml(msg)}</div></div>`;
+    }
+  }
+
+  function bindDetailAttachmentViewers(container) {
+    if (!container) return;
+
+    const triggers = container.querySelectorAll('.btn-open-attachment-viewer');
+    triggers.forEach((el) => {
+      const activate = () => {
+        const checkId = el.getAttribute('data-check-id') || '';
+        const attId = el.getAttribute('data-attachment-id') || '';
+        const attType = el.getAttribute('data-attachment-type') || 'photo';
+        const fname = el.getAttribute('data-filename') || '証跡ファイル';
+        const mime = el.getAttribute('data-mime') || '';
+        if (!checkId || !attId) return;
+        openAttachmentViewer({
+          shippingCheckId: checkId,
+          attachmentId: attId,
+          attachmentType: attType,
+          originalFilename: fname,
+          mimeType: mime
+        });
+      };
+      el.addEventListener('click', activate);
+      if (el.tagName !== 'BUTTON') {
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
           }
-        }
-      });
+        });
+      }
+    });
+
+    // Lazy-load authenticated photo thumbnails inside Detail Modal
+    const lazyThumbs = container.querySelectorAll('.js-lazy-photo-thumb');
+    lazyThumbs.forEach(async (thumbEl) => {
+      const checkId = thumbEl.getAttribute('data-check-id') || '';
+      const attId = thumbEl.getAttribute('data-attachment-id') || '';
+      const fname = thumbEl.getAttribute('data-filename') || '伝票写真';
+      const mime = thumbEl.getAttribute('data-mime') || 'image/jpeg';
+      if (!checkId || !attId) return;
+      try {
+        const entry = await fetchAuthorizedAttachmentBlobEntry(checkId, attId, mime, fname);
+        if (!thumbEl.isConnected) return;
+        thumbEl.innerHTML = `<img src="${escapeHtml(entry.blobUrl)}" alt="${escapeHtml(fname)}">`;
+      } catch {
+        if (!thumbEl.isConnected) return;
+        thumbEl.innerHTML = '<span style="font-size: 0.7rem; color: #DC2626;">読込失敗</span>';
+      }
     });
   }
 
@@ -3806,6 +6165,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Global Escape key handler for modal dialogs (TASK-012 Accessibility / UI-REVIEW-003-R1)
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' || e.keyCode === 27) {
+      const saveCompOverlay = document.getElementById('saveCompletionModal');
+      if (saveCompOverlay && saveCompOverlay.classList.contains('open')) {
+        if (typeof window.closeSaveCompletionModal === 'function') {
+          window.closeSaveCompletionModal({ navigateToList: false });
+        } else {
+          saveCompOverlay.classList.remove('open');
+          saveCompOverlay.style.display = 'none';
+        }
+        return;
+      }
+      const viewerOverlay = document.getElementById('attachmentViewerModal');
+      if (viewerOverlay && viewerOverlay.classList.contains('open')) {
+        if (typeof window.closeAttachmentViewerModal === 'function') {
+          window.closeAttachmentViewerModal();
+        } else {
+          viewerOverlay.classList.remove('open');
+        }
+        return;
+      }
       const openModals = document.querySelectorAll('.modal-overlay.open, .modal-overlay[style*="display: flex"]');
       openModals.forEach(m => {
         m.classList.remove('open');

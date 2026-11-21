@@ -1,4 +1,4 @@
-﻿/**
+/**
  * =============================================================================
  * ShippingErrorManager - Material Code Search Combobox Component
  * =============================================================================
@@ -41,6 +41,26 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function normalizeSearchText(str) {
+    var s = String(str || '');
+    if (typeof s.normalize === 'function') {
+      try {
+        s = s.normalize('NFKC');
+      } catch (e) {}
+    }
+    s = s.toUpperCase();
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charCodeAt(i);
+      if (ch >= 0x30A1 && ch <= 0x30F6) {
+        out += String.fromCharCode(ch - 0x60);
+      } else {
+        out += s.charAt(i);
+      }
+    }
+    return out;
   }
 
   /**
@@ -86,6 +106,31 @@
     return '';
   }
 
+  var sharedCachesByRpc = typeof WeakMap === 'function' ? new WeakMap() : null;
+  var SHARED_QUERY_CACHE_MAX_ENTRIES = 200;
+
+  function _resolveSharedSessionMaps(rpcClient, sessionToken) {
+    if (!sharedCachesByRpc || !rpcClient || typeof rpcClient !== 'object' || !sessionToken) {
+      return null;
+    }
+    var env = (typeof window !== 'undefined' && window.__SHIPPING_ERROR_RUNTIME_CONFIG__ && window.__SHIPPING_ERROR_RUNTIME_CONFIG__.environment)
+      ? String(window.__SHIPPING_ERROR_RUNTIME_CONFIG__.environment).trim()
+      : 'DEFAULT';
+    var scopeSignature = env + '::' + String(sessionToken);
+    var existing = sharedCachesByRpc.get(rpcClient);
+    if (existing && existing.scopeSignature === scopeSignature) {
+      return existing;
+    }
+    var fresh = {
+      scopeSignature: scopeSignature,
+      queryCache: new Map(),
+      inFlightRequests: new Map(),
+      knownMaterials: new Map()
+    };
+    sharedCachesByRpc.set(rpcClient, fresh);
+    return fresh;
+  }
+
   /**
    * MaterialCombobox Constructor.
    *
@@ -108,6 +153,8 @@
     this.onClear = opts.onClear || function () {};
     this.debounceMs = typeof opts.debounceMs === 'number' ? opts.debounceMs : 200;
     this.minQueryLength = typeof opts.minQueryLength === 'number' ? opts.minQueryLength : 2;
+    this.browseOnFocus = Boolean(opts.browseOnFocus);
+    this.isBrowseMode = false;
 
     if (opts.initialValue) {
       var initCode = opts.initialValue.materialCode || opts.initialValue.matCode || opts.initialValue.MaterialCode || '';
@@ -131,11 +178,12 @@
     this.isOpen = false;
     this.isLoading = false;
 
-    // Fast Cache & Deduplication structures
+    // Fast Cache & Deduplication structures (shared across detail cards within same session & rpcClient)
     this.queryCache = new Map(); // normalizedQuery -> { timestamp, candidates }
     this.inFlightRequests = new Map(); // normalizedQuery -> Promise
     this.knownMaterials = new Map(); // upperMaterialCode -> canonicalItem
     this.lastSessionToken = null;
+    this._syncSharedSessionCache();
 
     this._initElements();
     this._bindEvents();
@@ -159,8 +207,8 @@
       '  <ul class="material-combobox-popover" role="listbox" style="display: none;"></ul>',
       '  <div class="material-selected-card" style="display: none;">',
       '    <div class="material-selected-info">',
-      '      <span class="material-selected-code"></span>',
       '      <span class="material-selected-name"></span>',
+      '      <span class="material-selected-code"></span>',
       '    </div>',
       '    <button type="button" class="btn-clear-material" aria-label="選択を解除">' + renderLucideSvg('X', { size: 20 }) + '</button>',
       '  </div>',
@@ -185,40 +233,112 @@
       self._onInput(e.target.value);
     });
 
+    self.inputEl.addEventListener('compositionend', function (e) {
+      self._onInput(e.target.value);
+    });
+
+    self.inputEl.addEventListener('focus', function () {
+      if (self.browseOnFocus && !self.selectedMaterial && String(self.inputEl.value || '').trim() === '') {
+        self._fetchBrowseCandidates();
+      }
+    });
+
+    self.inputEl.addEventListener('click', function () {
+      if (self.browseOnFocus && !self.selectedMaterial && !self.isOpen && String(self.inputEl.value || '').trim() === '') {
+        self._fetchBrowseCandidates();
+      }
+    });
+
     self.inputEl.addEventListener('keydown', function (e) {
       self._onKeyDown(e);
+    });
+
+    self.inputEl.addEventListener('blur', function () {
+      self._tryAutoSelectExactTypedMatch();
     });
 
     self.clearBtnEl.addEventListener('click', function () {
       self.clear();
     });
 
-    // Close on outside click
+    // Close on outside click (skip detached instances cleanly)
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('click', function (e) {
-        if (self.wrapperEl && !self.wrapperEl.contains(e.target)) {
+        if (!self.wrapperEl) return;
+        if (typeof self.wrapperEl.isConnected === 'boolean' && !self.wrapperEl.isConnected) return;
+        if (!self.wrapperEl.contains(e.target)) {
           self.closePopover();
         }
       });
     }
   };
 
+  MaterialCombobox.prototype._syncSharedSessionCache = function () {
+    var token = this.getSessionToken ? this.getSessionToken() : '';
+    if (!token) {
+      if (this.lastSessionToken) {
+        this.clearCache();
+        this.lastSessionToken = null;
+      }
+      return '';
+    }
+    var shared = _resolveSharedSessionMaps(this.rpcClient, token);
+    if (shared) {
+      this.queryCache = shared.queryCache;
+      this.inFlightRequests = shared.inFlightRequests;
+      this.knownMaterials = shared.knownMaterials;
+      this.lastSessionToken = token;
+    } else if (this.lastSessionToken !== token) {
+      this.clearCache();
+      this.lastSessionToken = token;
+    }
+    return token;
+  };
+
+  MaterialCombobox.prototype._setBoundedQueryCache = function (key, entry) {
+    if (!this.queryCache) return;
+    if (this.queryCache.size >= SHARED_QUERY_CACHE_MAX_ENTRIES && !this.queryCache.has(key)) {
+      var oldestKey = this.queryCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.queryCache.delete(oldestKey);
+      }
+    }
+    this.queryCache.set(key, entry);
+  };
+
+  MaterialCombobox.prototype._isSearchableQuery = function (query) {
+    var q = String(query || '').trim();
+    if (!q) return false;
+    if (q.length >= this.minQueryLength) return true;
+    return q.length >= 1 && /[^\x00-\x7F]/.test(q);
+  };
+
   MaterialCombobox.prototype._onInput = function (value) {
     var self = this;
+    self._syncSharedSessionCache();
     var query = String(value || '').trim();
+    self.isBrowseMode = false;
 
     if (self.debounceTimer !== null) {
       clearTimeout(self.debounceTimer);
       self.debounceTimer = null;
     }
 
-    if (query.length < self.minQueryLength) {
+    if (!self._isSearchableQuery(query)) {
+      if (query === '' && self.browseOnFocus) {
+        var cachedBrowse = self.queryCache.get('__BROWSE__');
+        if (cachedBrowse && (Date.now() - cachedBrowse.timestamp < 300000)) {
+          self.isBrowseMode = true;
+          self._applyCandidates(cachedBrowse.candidates, '');
+          return;
+        }
+      }
       self.closePopover();
       self.candidates = [];
       return;
     }
 
-    var normQuery = query.toUpperCase();
+    var normQuery = normalizeSearchText(query);
 
     // Check query cache first: if cached, render immediately without debounce delay!
     var cached = self.queryCache.get(normQuery);
@@ -242,14 +362,21 @@
   MaterialCombobox.prototype._findLocalMatches = function (normQuery) {
     var results = [];
     var self = this;
-    if (!self.knownMaterials || self.knownMaterials.size === 0) return results;
+    if (!self.knownMaterials || self.knownMaterials.size === 0 || !normQuery) return results;
+    var tokens = normQuery.split(/\s+/).filter(Boolean);
 
     self.knownMaterials.forEach(function (item) {
-      var cUpper = item.materialCode.toUpperCase();
-      var nUpper = item.materialName.toUpperCase();
-      if (cUpper === normQuery) {
+      var cNorm = normalizeSearchText(item.materialCode);
+      var nNorm = normalizeSearchText(item.materialName);
+      if (cNorm === normQuery) {
         results.unshift(item); // Exact match first
-      } else if (cUpper.startsWith(normQuery) || cUpper.indexOf(normQuery) !== -1 || (nUpper && nUpper.indexOf(normQuery) !== -1)) {
+      } else if (
+        cNorm.startsWith(normQuery) ||
+        (nNorm && nNorm.startsWith(normQuery)) ||
+        (tokens.length > 0 && tokens.every(function (tok) {
+          return cNorm.indexOf(tok) !== -1 || (nNorm && nNorm.indexOf(tok) !== -1);
+        }))
+      ) {
         results.push(item);
       }
     });
@@ -263,23 +390,80 @@
     this._renderCandidates();
   };
 
+  MaterialCombobox.prototype._fetchBrowseCandidates = function () {
+    var self = this;
+    var token = self._syncSharedSessionCache();
+    if (!token || !self.rpcClient) return Promise.resolve();
+
+    var cacheKey = '__BROWSE__';
+    var cached = self.queryCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < 300000)) {
+      self.isBrowseMode = true;
+      self._applyCandidates(cached.candidates, '');
+      return Promise.resolve();
+    }
+
+    self.searchSequence++;
+    var currentSeq = self.searchSequence;
+    self.isBrowseMode = true;
+    if (self.candidates.length === 0) {
+      self.isLoading = true;
+      self._renderLoading();
+    }
+
+    var inFlightPromise = self.inFlightRequests.get(cacheKey);
+    if (!inFlightPromise) {
+      inFlightPromise = self.rpcClient.call('material.search', {
+        query: '',
+        browse: true,
+        sessionToken: token,
+        limit: 10
+      });
+      self.inFlightRequests.set(cacheKey, inFlightPromise);
+    }
+
+    return inFlightPromise
+      .then(function (response) {
+        self.inFlightRequests.delete(cacheKey);
+        if (currentSeq !== self.searchSequence) return;
+        self.isLoading = false;
+        var list = (response && response.payload && Array.isArray(response.payload)) ? response.payload : [];
+        list.forEach(function (m) {
+          var code = String(m.materialCode || m.MaterialCode || '').trim();
+          if (code) {
+            self.knownMaterials.set(code.toUpperCase(), {
+              materialCode: code,
+              materialName: String(m.materialName || m.MaterialName || '').trim(),
+              category: String(m.category || m.Category || '').trim()
+            });
+          }
+        });
+        self._setBoundedQueryCache(cacheKey, { timestamp: Date.now(), candidates: list });
+        self.isBrowseMode = true;
+        self._applyCandidates(list, '');
+      })
+      .catch(function () {
+        self.inFlightRequests.delete(cacheKey);
+        if (currentSeq !== self.searchSequence) return;
+        self.isLoading = false;
+        self.closePopover();
+      });
+  };
+
   MaterialCombobox.prototype._fetchCandidates = function (query) {
     var self = this;
-    var normQuery = String(query || '').trim().toUpperCase();
-    if (normQuery.length < self.minQueryLength) return;
+    var trimmedQuery = String(query || '').trim();
+    if (!self._isSearchableQuery(trimmedQuery)) return Promise.resolve();
+    var normQuery = normalizeSearchText(trimmedQuery);
 
-    var token = self.getSessionToken();
-    if (self.lastSessionToken !== token) {
-      self.clearCache();
-      self.lastSessionToken = token;
-    }
+    var token = self._syncSharedSessionCache();
 
     // If cache valid, skip RPC completely
     var cached = self.queryCache.get(normQuery);
     if (cached && (Date.now() - cached.timestamp < 300000)) {
       self.isLoading = false;
       self._applyCandidates(cached.candidates, query);
-      return;
+      return Promise.resolve();
     }
 
     self.searchSequence++;
@@ -293,7 +477,7 @@
 
     if (!self.rpcClient) {
       self.isLoading = false;
-      return;
+      return Promise.resolve();
     }
 
     // In-flight deduplication: reuse running promise if already fetching normQuery
@@ -307,7 +491,7 @@
       self.inFlightRequests.set(normQuery, inFlightPromise);
     }
 
-    inFlightPromise
+    return inFlightPromise
       .then(function (response) {
         self.inFlightRequests.delete(normQuery);
         // Discard stale responses from superseded queries (Section 21)
@@ -371,22 +555,26 @@
     if (!self.popoverEl) return;
 
     if (self.candidates.length === 0) {
-      self.popoverEl.innerHTML = '<li class="material-combobox-empty">該当する資材がありません</li>';
+      self.popoverEl.innerHTML = '<li class="material-combobox-empty">該当する資材がありません（資材名の一部や別のキーワードでお試しください）</li>';
       self.popoverEl.style.display = 'block';
       self.isOpen = true;
       if (self.inputEl) self.inputEl.setAttribute('aria-expanded', 'true');
       return;
     }
 
-    var html = self.candidates.map(function (mat, idx) {
+    var guideHtml = self.isBrowseMode
+      ? '<li class="material-combobox-guide" role="presentation">資材名の一部を入力して絞り込むか、下の候補から選択してください</li>\n'
+      : '';
+
+    var html = guideHtml + self.candidates.map(function (mat, idx) {
       var isHigh = idx === self.highlightedIndex;
       return [
         '<li role="option" class="material-combobox-item' + (isHigh ? ' is-highlighted' : '') + '" ',
         '    data-index="' + idx + '" ',
         '    data-code="' + escapeHtml(mat.materialCode) + '" ',
         '    data-name="' + escapeHtml(mat.materialName) + '">',
-        '  <span class="combobox-item-code">' + escapeHtml(mat.materialCode) + '</span>',
-        '  <span class="combobox-item-name">' + escapeHtml(mat.materialName) + '</span>',
+        '  <span class="combobox-item-name">' + escapeHtml(mat.materialName || mat.materialCode) + '</span>',
+        '  <span class="combobox-item-code">コード: ' + escapeHtml(mat.materialCode) + '</span>',
         '</li>'
       ].join('');
     }).join('\n');
@@ -396,9 +584,15 @@
     self.isOpen = true;
     if (self.inputEl) self.inputEl.setAttribute('aria-expanded', 'true');
 
-    // Attach touch / click listeners
+    // Attach touch / pointer / click listeners (preventDefault on pointerdown/mousedown avoids input blur cancelling click on PC & iPhone)
     var items = self.popoverEl.querySelectorAll('.material-combobox-item');
     items.forEach(function (el) {
+      el.addEventListener('pointerdown', function (ev) {
+        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      });
+      el.addEventListener('mousedown', function (ev) {
+        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      });
       el.addEventListener('click', function () {
         var idx = parseInt(el.dataset.index, 10);
         if (!isNaN(idx) && self.candidates[idx]) {
@@ -408,8 +602,53 @@
     });
   };
 
+  MaterialCombobox.prototype._tryAutoSelectExactTypedMatch = function () {
+    if (this.selectedMaterial || !this.inputEl) return;
+    var raw = String(this.inputEl.value || '').trim();
+    if (!raw) return;
+    var qNorm = normalizeSearchText(raw);
+    if (!qNorm) return;
+
+    var pool = [];
+    var seen = {};
+    var addPool = function (m) {
+      if (!m) return;
+      var code = String(m.materialCode || m.MaterialCode || '').trim();
+      if (!code || seen[code.toUpperCase()]) return;
+      seen[code.toUpperCase()] = true;
+      pool.push({
+        materialCode: code,
+        materialName: String(m.materialName || m.MaterialName || '').trim(),
+        category: String(m.category || m.Category || '').trim()
+      });
+    };
+    if (Array.isArray(this.candidates)) {
+      this.candidates.forEach(addPool);
+    }
+    if (this.knownMaterials && typeof this.knownMaterials.forEach === 'function') {
+      this.knownMaterials.forEach(addPool);
+    }
+
+    var codeExact = pool.filter(function (m) {
+      return normalizeSearchText(m.materialCode) === qNorm;
+    });
+    if (codeExact.length === 1) {
+      this.selectCandidate(codeExact[0]);
+      return;
+    }
+    var nameExact = pool.filter(function (m) {
+      return m.materialName && normalizeSearchText(m.materialName) === qNorm;
+    });
+    if (nameExact.length === 1) {
+      this.selectCandidate(nameExact[0]);
+    }
+  };
+
   MaterialCombobox.prototype._onKeyDown = function (e) {
     var self = this;
+    if (e && (e.isComposing || e.keyCode === 229)) {
+      return;
+    }
     if (!self.isOpen) {
       if (e.key === 'ArrowDown' && self.candidates.length > 0) {
         self.popoverEl.style.display = 'block';
@@ -452,11 +691,14 @@
   };
 
   MaterialCombobox.prototype.selectCandidate = function (candidate) {
-    if (!candidate || !candidate.materialCode) return;
+    var candCode = candidate && (candidate.materialCode || candidate.MaterialCode || candidate.matCode);
+    if (!candCode) return;
+    var candName = candidate.materialName || candidate.MaterialName || candidate.matName || '';
+    var candCat = candidate.category || candidate.Category || '';
     this.selectedMaterial = {
-      materialCode: String(candidate.materialCode).trim(),
-      materialName: String(candidate.materialName || '').trim(),
-      category: String(candidate.category || '').trim()
+      materialCode: String(candCode).trim(),
+      materialName: String(candName).trim(),
+      category: String(candCat).trim()
     };
     this.closePopover();
     this._renderSelection();
@@ -508,6 +750,10 @@
     if (this.queryCache) this.queryCache.clear();
     if (this.inFlightRequests) this.inFlightRequests.clear();
     if (this.knownMaterials) this.knownMaterials.clear();
+  };
+
+  MaterialCombobox.clearSharedCache = function () {
+    sharedCachesByRpc = typeof WeakMap === 'function' ? new WeakMap() : null;
   };
 
   return MaterialCombobox;

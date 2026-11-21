@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self';">
   <meta name="referrer" content="no-referrer">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>出荷チェック・積み間違い管理 | ShippingErrorManager</title>
   <link rel="stylesheet" href="assets/css/tokens.css?v=20261109a">
-  <link rel="stylesheet" href="assets/css/components.css?v=20261113b">
+  <link rel="stylesheet" href="assets/css/components.css?v=20261120a">
 </head>
 <body>
   <!-- Top Indeterminate Progress Bar (FRONTEND-001) -->
@@ -50,8 +50,25 @@
 
     <!-- View Section: 新規登録 (Record View) -->
     <div id="viewRecordSection" class="view-section">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
-        <h2 style="font-size: 1.25rem; font-weight: bold; margin: 0;">出荷チェック新規登録</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: var(--space-sm);">
+        <h2 id="recordViewHeading" style="font-size: 1.25rem; font-weight: bold; margin: 0;">出荷チェック新規登録</h2>
+      </div>
+
+      <!-- Collaborative Draft / Completed Co-Editing Mode Banner -->
+      <div id="editingModeBanner" class="editing-mode-banner" style="display: none;" role="status" aria-live="polite">
+        <div class="editing-mode-banner-main">
+          <div class="editing-mode-badges">
+            <span id="editingModeBadge" class="badge-record-status is-draft">一時保存編集中</span>
+            <span id="editingRevisionBadge" class="editing-rev-badge">Rev.1</span>
+          </div>
+          <div id="editingModeDescription" class="editing-mode-desc"></div>
+          <div id="editingReviewResetWarning" class="editing-review-reset-note" style="display: none;">
+            ※審査済み（OK / NG）の実績を編集して保存すると、前回の審査記録を履歴に残したうえで「未確認（再審査待ち）」へ自動的に戻ります。
+          </div>
+        </div>
+        <button type="button" id="btnCancelEditingMode" class="btn btn-secondary btn-cancel-editing">
+          新規入力に戻る
+        </button>
       </div>
       <!-- Form Container -->
       <form id="shipmentCheckForm" onsubmit="return false;" novalidate>
@@ -205,15 +222,35 @@
 
         <!-- UI-REVIEW-003: バラ積み作成者・バラ積み状態 (初期表示「はい」時は表示、「いいえ」時は非表示) -->
         <div id="looseItemFieldsContainer" class="loose-item-fields-group" style="display: block;">
-          <!-- バラ作成担当者 -->
+          <!-- バラ作成担当者（検索・複数選択対応） -->
           <div class="form-group" style="margin-bottom: var(--space-sm);">
-            <label class="form-label" for="txtLooseItemCreator">
-              <span>バラ作成担当者（任意）</span>
+            <label class="form-label" for="txtSearchLooseItemCreator">
+              <span>バラ作成担当者（複数選択可・任意）</span>
             </label>
-            <select id="txtLooseItemCreator" class="form-control" style="min-height: 48px; font-size: 1rem;">
+
+            <!-- 選択済みバラ作成者チップ一覧 -->
+            <div id="selectedLooseCreatorsChips" class="selected-creators-chips" aria-live="polite"></div>
+
+            <!-- 検索＆候補選択コンボボックス -->
+            <div class="loose-creator-picker-wrapper" id="looseCreatorPickerWrapper">
+              <input
+                type="search"
+                id="txtSearchLooseItemCreator"
+                class="form-control"
+                placeholder="氏名・コード・協力会社名で検索して追加"
+                autocomplete="off"
+                style="min-height: 48px; font-size: 1rem;"
+                aria-label="バラ作成担当者を検索して追加"
+              >
+              <div id="looseCreatorSearchDropdown" class="loose-creator-dropdown" role="listbox" aria-label="バラ作成担当者候補一覧" style="display: none;"></div>
+            </div>
+
+            <!-- 後方互換用隠しselect（既存設定連動テスト互換維持） -->
+            <select id="txtLooseItemCreator" class="form-control" style="display: none;" aria-hidden="true" tabindex="-1">
               <option value="">設定から担当者を追加してください</option>
             </select>
-            <div class="form-hint" id="looseItemCreatorDropdownHint">※所属Baseに登録されたバラ作成担当者から選択してください。未登録の場合は「設定」メニューから追加できます。</div>
+
+            <div class="form-hint" id="looseItemCreatorDropdownHint">※氏名・担当者コード・協力会社名で検索して複数名を選択できます。未登録の場合は「設定」メニューから追加できます。</div>
           </div>
 
           <!-- バラ作成状況 -->
@@ -289,42 +326,37 @@
         </button>
       </div>
 
-      <!-- TASK-007: 証跡添付 (スマホ紙伝票撮影 / 事務所PC既存PDFリンク) -->
+      <!-- TASK-007: 証跡添付 (伝票写真・PDFファイルのGoogle Drive保存) -->
       <div class="card" id="attachmentSection">
         <div class="card-title">
           <div class="card-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M6 12v6"/></svg></div>
-          <span class="card-section-label">証跡添付（写真・PDFリンク）</span>
+          <span class="card-section-label">証跡添付（写真・PDF）</span>
         </div>
         <p class="form-hint" style="margin-bottom: var(--space-md);">
-          紙伝票（ピッキングリスト・出荷指示書等）の撮影写真、または事務所PCで共有されている既存PDFリンクを添付できます（複数件登録可能）。
+          紙伝票（ピッキングリスト・出荷指示書等）の撮影写真、またはPDFファイルを添付できます（複数件登録可能・最大10件）。
         </p>
 
-        <!-- Attachment Action Controls -->
-        <div class="attachment-actions" style="display: flex; flex-direction: column; gap: var(--space-sm); margin-bottom: var(--space-md);">
-          <!-- Hidden file input for smartphone photo capture -->
-          <input type="file" id="fileCapturePhoto" accept="image/*" capture="environment" style="display: none;" multiple aria-hidden="true">
-          
-          <!-- Photo Capture Button (48px min touch target) -->
-          <button type="button" id="btnCapturePhoto" class="btn btn-secondary btn-block" style="min-height: 48px; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <!-- Attachment Action Controls (Photo Capture/Selection & PDF Direct File Selection) -->
+        <div class="attachment-actions attachment-action-grid">
+          <!-- Hidden file input for smartphone camera capture / photo library / PC image selection -->
+          <input type="file" id="fileCapturePhoto" accept="image/*" style="display: none;" multiple aria-hidden="true">
+          <!-- Hidden file input for PC / smartphone PDF file selection -->
+          <input type="file" id="fileSelectPdf" accept="application/pdf,.pdf" style="display: none;" multiple aria-hidden="true">
+
+          <!-- 1. Photo Capture / Selection Button (48px min touch target) -->
+          <button type="button" id="btnCapturePhoto" class="btn btn-secondary btn-block attachment-trigger-btn">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
             <span>伝票を撮影 / 写真を追加</span>
           </button>
 
-          <!-- PDF Link Registration Input Group (Office-PC workflow) -->
-          <div class="pdf-link-input-group" style="margin-top: var(--space-xs);">
-            <label class="form-label" for="txtPdfLink" style="margin-bottom: 4px;">
-              <span>事務所PC 既存PDFリンク登録</span>
-              <span class="form-hint" style="display: inline; margin-left: 6px; font-size: 0.8rem;">（共有フォルダパス・社内URL等）</span>
-            </label>
-            <div style="display: flex; gap: var(--space-xs); flex-wrap: wrap;">
-              <input type="text" id="txtPdfLink" class="form-control" placeholder="パスまたはURLを入力" style="flex: 1; min-width: 200px; min-height: 48px;">
-              <button type="button" id="btnAddPdfLink" class="btn btn-secondary" style="min-height: 48px; padding: 0 16px; white-space: nowrap;">
-                ＋ PDFリンク追加
-              </button>
-            </div>
-            <div class="form-error" id="pdfLinkError" style="display: none; margin-top: 4px;"></div>
-          </div>
+          <!-- 2. PDF Direct File Selection Button (48px min touch target) -->
+          <button type="button" id="btnSelectPdf" class="btn btn-secondary btn-block attachment-trigger-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <span>PDFファイルを添付</span>
+          </button>
         </div>
+
+        <div id="attachmentUploadStatus" class="attachment-upload-banner" style="display: none;" role="status" aria-live="polite"></div>
 
         <!-- Attachment List Container -->
         <div id="attachmentList" class="attachment-list" role="list" aria-label="添付証跡一覧">
@@ -333,16 +365,45 @@
         <div id="attachmentEmptyNotice" class="empty-notice" style="padding: var(--space-md); text-align: center; color: var(--color-text-muted); background: var(--color-bg-app); border-radius: var(--radius-sm);">
           添付された証跡はありません（任意）
         </div>
-        <div class="form-error" id="attachmentGlobalError" style="display: none; margin-top: var(--space-sm);"></div>
+        <div class="form-error" id="attachmentGlobalError" style="display: none; margin-top: var(--space-sm);" role="alert"></div>
       </div>
 
-<!-- TASK-008 Submit Action Bar -->
-      <div class="submit-action-bar" style="margin-top: var(--space-xl); margin-bottom: var(--space-xl); padding: 0 var(--space-md);">
-        <button type="button" id="btnSubmitCheck" class="btn btn-primary btn-block" style="min-height: 52px; font-size: 1.1rem; font-weight: bold; background-color: var(--palette-primary-btn, #FAAE2B); color: var(--palette-btn-text, #00473E); border-radius: var(--radius-md, 8px); cursor: pointer; border: none; width: 100%;">
-          出荷チェックを登録する
-        </button>
+      <!-- STEP 4: 完了登録直前の指導実施確認 -->
+      <div class="card guidance-confirm-card" id="guidanceConfirmationCard">
+        <div class="card-title">
+          <span>指導実施確認 <span class="required-asterisk">*</span></span>
+        </div>
+        <label class="guidance-check-row" for="chkGuidanceConfirmed">
+          <input type="checkbox" id="chkGuidanceConfirmed" class="guidance-check-input">
+          <span class="guidance-check-text">対象者への指導を実施しました</span>
+        </label>
+        <div class="form-hint" style="margin-top: 8px;">
+          ※一時保存する際は未チェックのままで保存できます。完了登録（および完了済み実績の修正保存）を行う際はチェックが必要です。
+        </div>
+        <div class="form-error" id="guidanceCheckError" role="alert"></div>
+      </div>
+
+<!-- TASK-008 Submit Action Bar (一時保存 / 完了登録) -->
+      <div class="submit-action-bar" style="margin-top: var(--space-lg); margin-bottom: var(--space-xl); padding: 0 var(--space-md);">
+        <div class="submit-buttons-grid" id="submitButtonsGrid">
+          <button type="button" id="btnSaveDraft" class="btn btn-secondary btn-save-draft">
+            一時保存
+          </button>
+          <button type="button" id="btnSubmitCheck" class="btn btn-primary btn-complete-submit" style="min-height: 52px; font-size: 1.05rem; font-weight: bold; background-color: var(--palette-primary-btn, #FAAE2B); color: var(--palette-btn-text, #00473E); border-radius: var(--radius-md, 8px); cursor: pointer; border: none; width: 100%;">
+            完了登録
+          </button>
+        </div>
+
+        <div id="revisionConflictBanner" class="revision-conflict-banner" style="display: none;" role="alert">
+          <div id="revisionConflictMessage" class="revision-conflict-msg"></div>
+          <button type="button" id="btnReloadLatestOnConflict" class="btn btn-secondary" style="min-height: 44px; font-weight: 700; margin-top: 8px;">
+            最新の内容を読み込む
+          </button>
+        </div>
+
         <div id="submitResultBanner" class="alert-banner" style="display: none; margin-top: var(--space-md); padding: var(--space-md); border-radius: var(--radius-md, 8px); font-size: 0.95rem; line-height: 1.5;">
           <div id="submitResultMessage"></div>
+          <div id="submitResultActions" style="display: none; margin-top: 10px; gap: 8px; flex-wrap: wrap;"></div>
         </div>
       </div>
 
@@ -376,12 +437,20 @@
           </button>
         </div>
         <!-- ROW 3: Screen-specific filters and count -->
-        <div class="month-filters-row">
+        <div class="month-filters-row" style="flex-wrap: wrap; gap: 8px;">
           <div class="base-scope-wrapper" id="baseScopeWrapperList" style="display: inline-flex; align-items: center; gap: 6px;">
             <label for="selListBaseScope" style="font-size: 0.85rem; font-weight: 600; color: var(--color-text-muted);">表示範囲:</label>
             <select id="selListBaseScope" class="form-control" style="height: 36px; padding: 4px 8px; font-size: 0.85rem; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background-color: #FFFFFF;" aria-label="表示拠点範囲">
               <option value="BASE" selected>自拠点</option>
               <option value="ALL">全国</option>
+            </select>
+          </div>
+          <div class="status-scope-wrapper" id="statusScopeWrapperList" style="display: inline-flex; align-items: center; gap: 6px;">
+            <label for="selListRecordStatus" style="font-size: 0.85rem; font-weight: 600; color: var(--color-text-muted);">状態:</label>
+            <select id="selListRecordStatus" class="form-control" style="height: 36px; padding: 4px 8px; font-size: 0.85rem; font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background-color: #FFFFFF;" aria-label="登録状態絞り込み">
+              <option value="ALL" selected>すべて</option>
+              <option value="DRAFT">一時保存</option>
+              <option value="COMPLETED">完了登録済み</option>
             </select>
           </div>
           <div style="display: inline-flex; align-items: center; gap: 6px; margin-left: auto;">
@@ -829,6 +898,27 @@
     </div>
   </div>
 
+  <!-- Evidence Attachment Viewer Modal (Authenticated Photo Zoom & PDF Preview) -->
+  <div class="modal-overlay" id="attachmentViewerModal" role="dialog" aria-modal="true" aria-labelledby="attachmentViewerTitle">
+    <div class="modal-content attachment-viewer-content">
+      <div class="modal-header attachment-viewer-header">
+        <h2 class="modal-title attachment-viewer-title" id="attachmentViewerTitle">証跡プレビュー</h2>
+        <div class="attachment-viewer-toolbar">
+          <a id="btnAttachmentOpenTab" class="btn btn-secondary attachment-viewer-action-btn" href="#" target="_blank" rel="noopener" style="display: none;">別タブで開く</a>
+          <a id="btnAttachmentDownload" class="btn btn-secondary attachment-viewer-action-btn" href="#" download style="display: none;">保存</a>
+          <button type="button" class="modal-close-btn" id="btnCloseAttachmentViewer" aria-label="閉じる" style="display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+      </div>
+      <div class="modal-body attachment-viewer-body" id="attachmentViewerBody">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="btnFooterCloseAttachmentViewer" style="min-height: 48px; width: 100%; font-size: 1rem;">
+          詳細に戻る
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Lift Operator Selection Modal [TASK-005] -->
   <div class="modal-overlay" id="driverModal" role="dialog" aria-modal="true" aria-labelledby="driverModalTitle">
     <div class="modal-content">
@@ -902,6 +992,35 @@
     </div>
   </div>
 
+  <!-- Save Completion Modal (Centered Foreground Confirmation) -->
+  <div class="modal-overlay save-completion-overlay" id="saveCompletionModal" role="dialog" aria-modal="true" aria-labelledby="saveCompletionTitle" aria-describedby="saveCompletionDesc" style="display: none;">
+    <div class="save-completion-dialog">
+      <button type="button" class="modal-close-btn save-completion-close" id="btnCloseSaveCompletion" aria-label="閉じる">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+      <div class="save-completion-icon" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h2 class="save-completion-title" id="saveCompletionTitle">登録が完了しました</h2>
+      <p class="save-completion-desc" id="saveCompletionDesc">入力内容は正常に保存されました。</p>
+      <div class="save-completion-actions">
+        <button type="button" class="btn btn-primary" id="btnSaveCompletionGoList">実績一覧に戻る</button>
+        <button type="button" class="btn btn-secondary" id="btnSaveCompletionClose">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subtle Non-Blocking Draft Saved Notification -->
+  <div id="draftSavedToast" class="draft-saved-toast" role="status" aria-live="polite" style="display: none;">
+    <span class="draft-saved-toast-icon" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </span>
+    <div class="draft-saved-toast-body">
+      <div class="draft-saved-toast-title" id="draftSavedToastTitle">一時保存しました</div>
+      <div class="draft-saved-toast-sub" id="draftSavedToastSub">後から続きを入力できます。</div>
+    </div>
+  </div>
+
   <!-- Material Error Notice Container (Legacy test & combobox fallback) -->
   <div id="materialErrorNotice" style="display: none;" aria-live="assertive">資材マスタの取得に失敗しました。時間をおいて再試行してください。</div>
 
@@ -911,21 +1030,21 @@
   <!-- Client Foundation Scripts -->
   <script src="js/config.js?v=20261109a"></script>
   <script src="js/lucide-icons.js?v=20261109a"></script>
-  <script src="js/transport-adapter.js?v=20261109a"></script>
-  <script src="js/rpc-client.js?v=20261109a"></script>
-  <script src="js/loading-component.js?v=20261109a"></script>
+  <script src="js/transport-adapter.js?v=20261116a"></script>
+  <script src="js/rpc-client.js?v=20261117a"></script>
+  <script src="js/loading-component.js?v=20261119b"></script>
   <script src="js/modal-manager.js?v=20261109a"></script>
-  <script src="js/material-combobox.js?v=20261109a"></script>
+  <script src="js/material-combobox.js?v=20261120b"></script>
   <script src="js/password-kdf.js?v=20261113a"></script>
   <script src="js/session-client.js?v=20261109a"></script>
   <script src="js/auth-client.js?v=20261113a"></script>
   <script src="js/authorization-client.js?v=20261109a"></script>
-  <script src="js/master-client.js?v=20261109a"></script>
-  <script src="js/shipment-cache.js?v=20261109a"></script>
-  <script src="js/shipment-client.js?v=20261109a"></script>
-  <script src="js/shipment-check-form.js?v=20261109a"></script>
+  <script src="js/master-client.js?v=20261120b"></script>
+  <script src="js/shipment-cache.js?v=20261120b"></script>
+  <script src="js/shipment-client.js?v=20261119b"></script>
+  <script src="js/shipment-check-form.js?v=20261119b"></script>
   <script src="js/review.js?v=20261109a"></script>
   <script src="js/analytics.js?v=20261109a"></script>
-  <script src="js/app.js?v=20261113b"></script>
+  <script src="js/app.js?v=20261120b"></script>
 </body>
 </html>

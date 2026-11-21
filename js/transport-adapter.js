@@ -88,6 +88,9 @@
     err.code = code;
     err.requestId = reqId;
     err.isSafeMessage = true;
+    if (rawError && typeof rawError === 'object' && rawError.stagedAttachmentsCleaned === true) {
+      err.stagedAttachmentsCleaned = true;
+    }
     return err;
   }
 
@@ -260,6 +263,7 @@
               code: err.code || 'SERVER_ERROR',
               message: err.message || 'サーバーでエラーが発生しました。',
               isSafeMessage: true,
+              stagedAttachmentsCleaned: err.stagedAttachmentsCleaned === true,
               requestId: parsedResponse.requestId || cleanEnvelope.requestId
             }, cleanEnvelope.requestId);
           }
